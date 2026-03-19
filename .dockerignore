@@ -1,0 +1,11 @@
+.git
+.idea
+vendor
+bin
+image-proxy
+*.test
+*.out
+Dockerfile
+docker-compose.yml
+README.md
+junie.md

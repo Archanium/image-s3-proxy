@@ -1,0 +1,238 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"image-proxy/internal/types"
+	"image-proxy/internal/worker"
+	"log"
+	"net/http"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+)
+
+var (
+	// Regex 1: Resize request for products/blocks
+	resizeRegex = regexp.MustCompile(`^/?(?P<shopId>\d{1,3})(-(?P<group>[\w]+))?/((?P<version>\d{1})?/?)(images/)?(?P<folder>products|blocks)/(?P<width>\d{1,4}[.\d]{0,2})/(?P<height>\d{1,4}[.\d]{0,2})/(?P<path>[\w\.\-]+)$`)
+	// Regex 2: File request
+	fileRegex = regexp.MustCompile(`^/?(?P<shopId>\d{1,3})(-(?P<group>[\w]+))?/files/(?P<fileId>\d{1,3})/(?P<path>[\w\.\-]+)$`)
+	// Regex 3: Simple image request (often with format change)
+	folderImageRegex = regexp.MustCompile(`^/?(?P<shopId>\d{1,3})(-(?P<group>[\w]+))?/((?P<version>\d{1})?/?)images/(?P<folder>[^/]+)/(?P<path>[\w\.\-]+)$`)
+)
+
+type Server struct {
+	s3Client types.S3Client
+	resizer  types.Resizer
+	tags     map[string]string
+	worker   *worker.Worker
+}
+
+func NewServer(s3Client types.S3Client, resizer types.Resizer, tags map[string]string) *Server {
+	return &Server{
+		s3Client: s3Client,
+		resizer:  resizer,
+		tags:     tags,
+		worker:   worker.NewWorker(s3Client, resizer, tags),
+	}
+}
+
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost && r.URL.Path == "/_/worker/trigger" {
+		s.handleWorkerTrigger(w, r)
+		return
+	}
+
+	key := strings.TrimPrefix(r.URL.Path, "/")
+	ctx := r.Context()
+
+	// 1. Check if the key exists in S3
+	exists, err := s.s3Client.Exists(ctx, key)
+	if err != nil {
+		log.Printf("Error checking S3 existence for %s: %v", key, err)
+	}
+
+	if exists {
+		// Serve from S3
+		data, contentType, err := s.s3Client.Get(ctx, key)
+		if err == nil {
+			w.Header().Set("Content-Type", contentType)
+			w.Header().Set("Cache-Control", "max-age=31536000")
+			w.Write(data)
+			return
+		}
+		log.Printf("Error getting from S3 %s: %v", key, err)
+	}
+
+	// 2. If not found, try to match patterns for resizing
+	if match := getNamedGroups(resizeRegex, key); match != nil {
+		s.handleResize(w, ctx, key, match, 1)
+		return
+	}
+
+	if match := getNamedGroups(fileRegex, key); match != nil {
+		s.handleFile(w, ctx, key, match)
+		return
+	}
+
+	if match := getNamedGroups(folderImageRegex, key); match != nil {
+		s.handleResize(w, ctx, key, match, 3)
+		return
+	}
+
+	// 3. Not found and no pattern matches
+	http.Error(w, "Not Found", http.StatusNotFound)
+}
+
+func (s *Server) handleResize(w http.ResponseWriter, ctx context.Context, key string, groups map[string]string, regexType int) {
+	var originalKey string
+	var opts types.ImageOptions
+
+	path := groups["path"]
+	folder := groups["folder"]
+	versionStr := groups["version"]
+	version := 1
+	if versionStr != "" {
+		version, _ = strconv.Atoi(versionStr)
+	}
+
+	// Extract format and actual path from filename
+	ext := filepath.Ext(path) // e.g. .webp
+	format := strings.TrimPrefix(ext, ".")
+	basePath := strings.TrimSuffix(path, ext)
+
+	// If there are multiple extensions (e.g. image.jpg.webp)
+	if strings.Contains(basePath, ".") {
+		// Sharp logic: if multiple dots, pop the last one as format
+		// path parts for image.jpg.webp -> [image, jpg, webp]
+		// path = image.jpg, format = webp
+		// originalKey will use image.jpg
+	} else {
+		// If only one extension, it's just the image
+		// But in originalKey we might need the original format if it was different.
+		// However, the Node.js code seems to use groups.path as-is for originalKey
+		// if it doesn't do the popping logic.
+	}
+
+	// Replicate popping logic
+	pathParts := strings.Split(path, ".")
+	if len(pathParts) > 2 {
+		format = pathParts[len(pathParts)-1]
+		pathParts = pathParts[:len(pathParts)-1]
+		path = strings.Join(pathParts, ".")
+	} else if len(pathParts) == 2 {
+		format = pathParts[1]
+	}
+
+	originalKey = "catalog/" + folder + "/images/" + path
+	opts.Version = version
+	opts.Format = format
+
+	if regexType == 1 {
+		wVal, _ := strconv.Atoi(groups["width"])
+		hVal, _ := strconv.Atoi(groups["height"])
+		if wVal == 0 && hVal == 0 {
+			wVal = 2560
+		}
+		opts.Width = wVal
+		opts.Height = hVal
+		opts.Fit = "contain" // Default for Regex 1 in Node.js
+	} else if regexType == 3 {
+		opts.Width = 2000
+		opts.Height = 0
+		opts.Fit = "inside"
+	}
+
+	// Fetch original from S3
+	data, _, err := s.s3Client.Get(ctx, originalKey)
+	if err != nil {
+		log.Printf("Original not found: %s", originalKey)
+		http.Error(w, "Original not found", http.StatusNotFound)
+		return
+	}
+
+	// Resize
+	resizedData, contentType, err := s.resizer.Resize(data, opts)
+	if err != nil {
+		log.Printf("Resize error: %v", err)
+		http.Error(w, "Resize error", http.StatusInternalServerError)
+		return
+	}
+
+	// Save back to S3
+	err = s.s3Client.Put(ctx, key, resizedData, contentType, s.tags)
+	if err != nil {
+		log.Printf("S3 Save error: %v", err)
+	}
+
+	// Serve
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "max-age=31536000")
+	w.Write(resizedData)
+}
+
+func (s *Server) handleFile(w http.ResponseWriter, ctx context.Context, key string, groups map[string]string) {
+	fileId := groups["fileId"]
+	path := groups["path"]
+	originalKey := "files/" + fileId + "/" + path
+
+	data, contentType, err := s.s3Client.Get(ctx, originalKey)
+	if err != nil {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	// Save back to S3 (caching)
+	err = s.s3Client.Put(ctx, key, data, contentType, s.tags)
+	if err != nil {
+		log.Printf("S3 Save error: %v", err)
+	}
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "max-age=31536000")
+	w.Write(data)
+}
+
+func (s *Server) handleWorkerTrigger(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		Key string `json:"key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if payload.Key == "" {
+		http.Error(w, "Missing key in payload", http.StatusBadRequest)
+		return
+	}
+
+	go func() {
+		ctx := context.Background()
+		if err := s.worker.ProcessS3Event(ctx, "", payload.Key); err != nil {
+			log.Printf("Worker processing error for key %s: %v", payload.Key, err)
+		}
+	}()
+
+	w.WriteHeader(http.StatusAccepted)
+	w.Write([]byte("Accepted"))
+}
+
+func getNamedGroups(re *regexp.Regexp, s string) map[string]string {
+	match := re.FindStringSubmatch(s)
+	if match == nil {
+		return nil
+	}
+	result := make(map[string]string)
+	for i, name := range re.SubexpNames() {
+		if i != 0 && name != "" {
+			result[name] = match[i]
+		}
+	}
+	return result
+}

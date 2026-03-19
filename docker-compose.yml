@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  # Main application service mirroring production environment
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: image-proxy:latest
+    environment:
+      - BUCKET=${BUCKET:-my-bucket}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-test}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-test}
+      - PORT=8080
+      - IMAGE_TAGS=ManagedBy=ImageProxy,Environment=Production
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  # Service for running tests in the build environment (with libvips-dev and CGO)
+  tester:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    image: image-proxy-builder:latest
+    command: go test -v ./...
+    environment:
+      - BUCKET=test-bucket
