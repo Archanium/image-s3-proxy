@@ -1,5 +1,5 @@
 # Stage 1: Build
-FROM golang:1.19-bullseye AS builder
+FROM golang:1.21-bookworm AS builder
 
 # Install dependencies for libvips and CGO
 RUN apt-get update && apt-get install -y \
@@ -21,7 +21,7 @@ COPY . .
 RUN CGO_ENABLED=1 GOOS=linux go build -o /image-proxy ./cmd/image-proxy
 
 # Stage 2: Final
-FROM debian:bullseye-slim
+FROM debian:bookworm-slim
 
 # Install libvips dependencies in the final image
 RUN apt-get update && apt-get install -y \

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"image-proxy/internal/resizer"
 	"image-proxy/internal/s3"
 	"image-proxy/internal/server"
@@ -27,6 +28,7 @@ func main() {
 
 	accessKey := os.Getenv("AWS_ACCESS_KEY_ID")
 	secretKey := os.Getenv("AWS_SECRET_ACCESS_KEY")
+	endpoint := os.Getenv("S3_ENDPOINT")
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -45,8 +47,18 @@ func main() {
 		}
 	}
 
+	sizeStr := os.Getenv("SIZES")
+	var sizes [][]int
+	if sizeStr != "" {
+		if err := json.Unmarshal([]byte(sizeStr), &sizes); err != nil {
+			log.Printf("Warning: Failed to parse SIZES environment variable: %v. Using defaults.", err)
+		}
+	}
+
+	format := os.Getenv("FORMAT")
+
 	ctx := context.Background()
-	s3Client, err := s3.NewClient(ctx, bucket, region, accessKey, secretKey)
+	s3Client, err := s3.NewClient(ctx, bucket, region, accessKey, secretKey, endpoint)
 	if err != nil {
 		log.Fatalf("Failed to initialize S3 client: %v", err)
 	}
@@ -55,7 +67,7 @@ func main() {
 	imgResizer.Startup()
 	defer imgResizer.Shutdown()
 
-	srv := server.NewServer(s3Client, imgResizer, tags)
+	srv := server.NewServer(s3Client, imgResizer, tags, sizes, format)
 
 	log.Printf("Starting image proxy on port %s", port)
 	if err := http.ListenAndServe(":"+port, srv); err != nil {

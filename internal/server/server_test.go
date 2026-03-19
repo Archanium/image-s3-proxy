@@ -11,18 +11,18 @@ import (
 )
 
 type mockS3Client struct {
-	existsFunc func(ctx interface{}, key string) (bool, error)
-	getFunc    func(ctx interface{}, key string) ([]byte, string, error)
-	putFunc    func(ctx interface{}, key string, data []byte, contentType string, tags map[string]string) error
+	existsFunc func(ctx context.Context, key string) (bool, error)
+	getFunc    func(ctx context.Context, key string) ([]byte, string, error)
+	putFunc    func(ctx context.Context, key string, data []byte, contentType string, tags map[string]string) error
 }
 
-func (m *mockS3Client) Exists(ctx interface{}, key string) (bool, error) {
+func (m *mockS3Client) Exists(ctx context.Context, key string) (bool, error) {
 	return m.existsFunc(ctx, key)
 }
-func (m *mockS3Client) Get(ctx interface{}, key string) ([]byte, string, error) {
+func (m *mockS3Client) Get(ctx context.Context, key string) ([]byte, string, error) {
 	return m.getFunc(ctx, key)
 }
-func (m *mockS3Client) Put(ctx interface{}, key string, data []byte, contentType string, tags map[string]string) error {
+func (m *mockS3Client) Put(ctx context.Context, key string, data []byte, contentType string, tags map[string]string) error {
 	return m.putFunc(ctx, key, data, contentType, tags)
 }
 
@@ -36,13 +36,13 @@ func (m *mockResizer) Resize(data []byte, opts types.ImageOptions) ([]byte, stri
 
 func TestServeHTTP_ExistingFile(t *testing.T) {
 	s3 := &mockS3Client{
-		existsFunc: func(ctx interface{}, key string) (bool, error) { return true, nil },
-		getFunc: func(ctx interface{}, key string) ([]byte, string, error) {
+		existsFunc: func(ctx context.Context, key string) (bool, error) { return true, nil },
+		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
 			return []byte("test-data"), "image/jpeg", nil
 		},
 	}
 	resizer := &mockResizer{}
-	srv := NewServer(s3, resizer, nil)
+	srv := NewServer(s3, resizer, nil, nil, "")
 
 	req := httptest.NewRequest("GET", "/test-image.jpg", nil)
 	w := httptest.NewRecorder()
@@ -59,14 +59,14 @@ func TestServeHTTP_ExistingFile(t *testing.T) {
 
 func TestServeHTTP_Resize(t *testing.T) {
 	s3 := &mockS3Client{
-		existsFunc: func(ctx interface{}, key string) (bool, error) { return false, nil },
-		getFunc: func(ctx interface{}, key string) ([]byte, string, error) {
-			if key == "catalog/products/images/test-image.jpg" {
+		existsFunc: func(ctx context.Context, key string) (bool, error) { return false, nil },
+		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
+			if key == "123/catalog/products/images/test-image.jpg" {
 				return []byte("original-data"), "image/jpeg", nil
 			}
 			return nil, "", context.DeadlineExceeded // Should not happen in this test
 		},
-		putFunc: func(ctx interface{}, key string, data []byte, contentType string, tags map[string]string) error {
+		putFunc: func(ctx context.Context, key string, data []byte, contentType string, tags map[string]string) error {
 			return nil
 		},
 	}
@@ -75,7 +75,7 @@ func TestServeHTTP_Resize(t *testing.T) {
 			return []byte("resized-data"), "image/webp", nil
 		},
 	}
-	srv := NewServer(s3, resizer, nil)
+	srv := NewServer(s3, resizer, nil, nil, "")
 
 	req := httptest.NewRequest("GET", "/123/2/images/products/100/100/test-image.jpg.webp", nil)
 	w := httptest.NewRecorder()
@@ -92,10 +92,10 @@ func TestServeHTTP_Resize(t *testing.T) {
 
 func TestWorkerTrigger(t *testing.T) {
 	s3 := &mockS3Client{
-		getFunc: func(ctx interface{}, key string) ([]byte, string, error) {
+		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
 			return []byte("original-data"), "image/jpeg", nil
 		},
-		putFunc: func(ctx interface{}, key string, data []byte, contentType string, tags map[string]string) error {
+		putFunc: func(ctx context.Context, key string, data []byte, contentType string, tags map[string]string) error {
 			return nil
 		},
 	}
@@ -104,7 +104,7 @@ func TestWorkerTrigger(t *testing.T) {
 			return []byte("resized-data"), "image/webp", nil
 		},
 	}
-	srv := NewServer(s3, resizer, nil)
+	srv := NewServer(s3, resizer, nil, nil, "")
 
 	payload := map[string]string{"key": "catalog/products/images/test.jpg"}
 	body, _ := json.Marshal(payload)
@@ -130,13 +130,13 @@ func TestRegexMatching(t *testing.T) {
 			path:  "123-group/2/images/products/150/210/test-image.jpg.webp",
 			regex: "resize",
 			expected: map[string]string{
-				"shopId":  "123",
-				"group":   "group",
-				"version": "2",
-				"folder":  "products",
-				"width":   "150",
-				"height":  "210",
-				"path":    "test-image.jpg.webp",
+				"clientId": "123",
+				"group":    "group",
+				"version":  "2",
+				"folder":   "products",
+				"width":    "150",
+				"height":   "210",
+				"path":     "test-image.jpg.webp",
 			},
 		},
 		{
@@ -144,9 +144,9 @@ func TestRegexMatching(t *testing.T) {
 			path:  "123/files/456/document.pdf",
 			regex: "file",
 			expected: map[string]string{
-				"shopId": "123",
-				"fileId": "456",
-				"path":   "document.pdf",
+				"clientId": "123",
+				"fileId":   "456",
+				"path":     "document.pdf",
 			},
 		},
 		{
@@ -154,9 +154,9 @@ func TestRegexMatching(t *testing.T) {
 			path:  "123/images/custom/another-image.png",
 			regex: "folderImage",
 			expected: map[string]string{
-				"shopId": "123",
-				"folder": "custom",
-				"path":   "another-image.png",
+				"clientId": "123",
+				"folder":   "custom",
+				"path":     "another-image.png",
 			},
 		},
 	}

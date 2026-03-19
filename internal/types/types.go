@@ -1,5 +1,7 @@
 package types
 
+import "context"
+
 type ImageOptions struct {
 	Width      int
 	Height     int
@@ -15,9 +17,9 @@ type Resizer interface {
 }
 
 type S3Client interface {
-	Exists(ctx interface{}, key string) (bool, error)
-	Get(ctx interface{}, key string) ([]byte, string, error) // data, contentType, err
-	Put(ctx interface{}, key string, data []byte, contentType string, tags map[string]string) error
+	Exists(ctx context.Context, key string) (bool, error)
+	Get(ctx context.Context, key string) ([]byte, string, error) // data, contentType, err
+	Put(ctx context.Context, key string, data []byte, contentType string, tags map[string]string) error
 }
 
 type Storage interface {

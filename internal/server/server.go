@@ -15,11 +15,11 @@ import (
 
 var (
 	// Regex 1: Resize request for products/blocks
-	resizeRegex = regexp.MustCompile(`^/?(?P<shopId>\d{1,3})(-(?P<group>[\w]+))?/((?P<version>\d{1})?/?)(images/)?(?P<folder>products|blocks)/(?P<width>\d{1,4}[.\d]{0,2})/(?P<height>\d{1,4}[.\d]{0,2})/(?P<path>[\w\.\-]+)$`)
+	resizeRegex = regexp.MustCompile(`^/?(?P<clientId>\d{1,3})(-(?P<group>[\w]+))?/((?P<version>\d{1})?/?)(images/)?(?P<folder>products|blocks)/(?P<width>\d{1,4}[.\d]{0,2})/(?P<height>\d{1,4}[.\d]{0,2})/(?P<path>[\w\.\-]+)$`)
 	// Regex 2: File request
-	fileRegex = regexp.MustCompile(`^/?(?P<shopId>\d{1,3})(-(?P<group>[\w]+))?/files/(?P<fileId>\d{1,3})/(?P<path>[\w\.\-]+)$`)
+	fileRegex = regexp.MustCompile(`^/?(?P<clientId>\d{1,3})(-(?P<group>[\w]+))?/files/(?P<fileId>\d{1,3})/(?P<path>[\w\.\-]+)$`)
 	// Regex 3: Simple image request (often with format change)
-	folderImageRegex = regexp.MustCompile(`^/?(?P<shopId>\d{1,3})(-(?P<group>[\w]+))?/((?P<version>\d{1})?/?)images/(?P<folder>[^/]+)/(?P<path>[\w\.\-]+)$`)
+	folderImageRegex = regexp.MustCompile(`^/?(?P<clientId>\d{1,3})(-(?P<group>[\w]+))?/((?P<version>\d{1})?/?)images/(?P<folder>[^/]+)/(?P<path>[\w\.\-]+)$`)
 )
 
 type Server struct {
@@ -29,12 +29,12 @@ type Server struct {
 	worker   *worker.Worker
 }
 
-func NewServer(s3Client types.S3Client, resizer types.Resizer, tags map[string]string) *Server {
+func NewServer(s3Client types.S3Client, resizer types.Resizer, tags map[string]string, sizes [][]int, format string) *Server {
 	return &Server{
 		s3Client: s3Client,
 		resizer:  resizer,
 		tags:     tags,
-		worker:   worker.NewWorker(s3Client, resizer, tags),
+		worker:   worker.NewWorker(s3Client, resizer, tags, sizes, format),
 	}
 }
 
@@ -47,6 +47,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	key := strings.TrimPrefix(r.URL.Path, "/")
 	ctx := r.Context()
 
+	log.Printf("Received request for key: %s", key)
+
 	// 1. Check if the key exists in S3
 	exists, err := s.s3Client.Exists(ctx, key)
 	if err != nil {
@@ -54,6 +56,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if exists {
+		log.Printf("Key %s found in S3, serving directly", key)
 		// Serve from S3
 		data, contentType, err := s.s3Client.Get(ctx, key)
 		if err == nil {
@@ -67,20 +70,24 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 2. If not found, try to match patterns for resizing
 	if match := getNamedGroups(resizeRegex, key); match != nil {
+		log.Printf("Key %s matched resize regex", key)
 		s.handleResize(w, ctx, key, match, 1)
 		return
 	}
 
 	if match := getNamedGroups(fileRegex, key); match != nil {
+		log.Printf("Key %s matched file regex", key)
 		s.handleFile(w, ctx, key, match)
 		return
 	}
 
 	if match := getNamedGroups(folderImageRegex, key); match != nil {
+		log.Printf("Key %s matched folder image regex", key)
 		s.handleResize(w, ctx, key, match, 3)
 		return
 	}
 
+	log.Printf("Key %s did not match any pattern", key)
 	// 3. Not found and no pattern matches
 	http.Error(w, "Not Found", http.StatusNotFound)
 }
@@ -92,6 +99,7 @@ func (s *Server) handleResize(w http.ResponseWriter, ctx context.Context, key st
 	path := groups["path"]
 	folder := groups["folder"]
 	versionStr := groups["version"]
+	clientId := groups["clientId"]
 	version := 1
 	if versionStr != "" {
 		version, _ = strconv.Atoi(versionStr)
@@ -125,7 +133,8 @@ func (s *Server) handleResize(w http.ResponseWriter, ctx context.Context, key st
 		format = pathParts[1]
 	}
 
-	originalKey = "catalog/" + folder + "/images/" + path
+	originalKey = clientId + "/catalog/" + folder + "/images/" + path
+	log.Printf("Calculated originalKey: %s", originalKey)
 	opts.Version = version
 	opts.Format = format
 
@@ -175,7 +184,8 @@ func (s *Server) handleResize(w http.ResponseWriter, ctx context.Context, key st
 func (s *Server) handleFile(w http.ResponseWriter, ctx context.Context, key string, groups map[string]string) {
 	fileId := groups["fileId"]
 	path := groups["path"]
-	originalKey := "files/" + fileId + "/" + path
+	clientId := groups["clientId"]
+	originalKey := clientId + "/files/" + fileId + "/" + path
 
 	data, contentType, err := s.s3Client.Get(ctx, originalKey)
 	if err != nil {

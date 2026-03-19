@@ -6,12 +6,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: image-proxy:latest
+    image: archanium/image-proxy:latest
     environment:
       - BUCKET=${BUCKET:-my-bucket}
       - AWS_REGION=${AWS_REGION:-us-east-1}
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-test}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-test}
+      - S3_ENDPOINT=${S3_ENDPOINT:-}
       - PORT=8080
       - IMAGE_TAGS=ManagedBy=ImageProxy,Environment=Production
     ports:
@@ -24,7 +25,9 @@ services:
       context: .
       dockerfile: Dockerfile
       target: builder
-    image: image-proxy-builder:latest
+    volumes:
+      - ./:/app/
+    image: archanium/image-proxy-builder:latest
     command: go test -v ./...
     environment:
       - BUCKET=test-bucket

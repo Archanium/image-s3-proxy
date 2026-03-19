@@ -9,12 +9,22 @@ A Go-based serverless image resizer and proxy with libvips, mirroring the logic 
 - Supports worker trigger for bulk resizing.
 - Configurable via environment variables.
 
+## Usage with Makefile
+
+A `Makefile` is provided to simplify common tasks:
+
+- **Build images**: `make build`
+- **Run tests (within Docker)**: `make test`
+- **Format code**: `make fmt`
+- **Start application**: `make up`
+- **Stop application**: `make down`
+
 ## Running the Proxy
 
 You can use Docker Compose to run the proxy locally:
 
 ```bash
-docker-compose up app
+make up
 ```
 
 The server will be available at `http://localhost:8080`.
@@ -26,13 +36,6 @@ The server will be available at `http://localhost:8080`.
 - `AWS_SECRET_ACCESS_KEY`: AWS secret key.
 - `PORT`: Server port (defaults to `8080`).
 - `IMAGE_TAGS`: Comma-separated list of tags (e.g., `Project=Dreamabout,Environment=Production`).
+- `SIZES`: (Worker only) JSON array of target sizes for bulk resizing (e.g., `[[150,210],[240,0]]`). Defaults to a predefined list.
+- `FORMAT`: (Worker only) Target format for bulk resizing (e.g., `webp`, `avif`, `jpg`). Defaults to `avif`.
 
-## Running Tests
-
-To run tests in a consistent environment that mirrors the build environment:
-
-```bash
-docker-compose run tester
-```
-
-This will run all Go unit tests using the build container, ensuring that `libvips` and other dependencies are correctly set up.
