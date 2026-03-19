@@ -6,7 +6,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: archanium/image-proxy:latest
+    image: archanium/image-s3-proxy:latest
     environment:
       - BUCKET=${BUCKET:-my-bucket}
       - AWS_REGION=${AWS_REGION:-us-east-1}
