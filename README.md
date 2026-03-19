@@ -13,10 +13,12 @@ A Go-based serverless image resizer and proxy with libvips, mirroring the logic 
 
 A `Makefile` is provided to simplify common tasks:
 
-- **Build images**: `make build`
-- **Run tests (within Docker)**: `make test`
+- **Build images (Alpine)**: `make build` (or `make build-alpine`)
+- **Build images (Debian)**: `make build-debian`
+- **Run tests (Alpine)**: `make test` (or `make test-alpine`)
+- **Run tests (Debian)**: `make test-debian`
 - **Format code**: `make fmt`
-- **Start application**: `make up`
+- **Start application (Alpine)**: `make up`
 - **Stop application**: `make down`
 
 ## Running the Proxy
