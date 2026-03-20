@@ -14,7 +14,12 @@ func NewResizer() *LibvipsResizer {
 	return &LibvipsResizer{}
 }
 
-func (r *LibvipsResizer) Startup() {
+func (r *LibvipsResizer) Startup(debug bool) {
+	if !debug {
+		vips.LoggingSettings(func(domain string, level vips.LogLevel, msg string) {
+			// Do nothing
+		}, vips.LogLevelError)
+	}
 	vips.Startup(nil)
 }
 

@@ -7,10 +7,20 @@ import (
 	"errors"
 	"fmt"
 	"image-proxy/internal/types"
+	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 )
+
+func TestMain(m *testing.M) {
+	if os.Getenv("DEBUG") != "true" {
+		log.SetOutput(io.Discard)
+	}
+	os.Exit(m.Run())
+}
 
 type mockS3Client struct {
 	existsFunc func(ctx context.Context, key string) (bool, error)

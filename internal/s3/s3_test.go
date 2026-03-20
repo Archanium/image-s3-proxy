@@ -5,10 +5,19 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log"
+	"os"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
+
+func TestMain(m *testing.M) {
+	if os.Getenv("DEBUG") != "true" {
+		log.SetOutput(io.Discard)
+	}
+	os.Exit(m.Run())
+}
 
 type mockS3API struct {
 	headFunc func(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error)

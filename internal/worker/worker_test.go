@@ -3,8 +3,18 @@ package worker
 import (
 	"context"
 	"image-proxy/internal/types"
+	"io"
+	"log"
+	"os"
 	"testing"
 )
+
+func TestMain(m *testing.M) {
+	if os.Getenv("DEBUG") != "true" {
+		log.SetOutput(io.Discard)
+	}
+	os.Exit(m.Run())
+}
 
 type mockS3Client struct {
 	getFunc func(ctx context.Context, key string) ([]byte, string, error)

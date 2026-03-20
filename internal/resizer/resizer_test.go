@@ -10,6 +10,11 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if os.Getenv("DEBUG") != "true" {
+		vips.LoggingSettings(func(domain string, level vips.LogLevel, msg string) {
+			// Do nothing
+		}, vips.LogLevelError)
+	}
 	vips.Startup(nil)
 	code := m.Run()
 	vips.Shutdown()

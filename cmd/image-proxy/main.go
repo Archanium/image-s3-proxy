@@ -6,6 +6,7 @@ import (
 	"image-proxy/internal/resizer"
 	"image-proxy/internal/s3"
 	"image-proxy/internal/server"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -13,6 +14,11 @@ import (
 )
 
 func main() {
+	debug := os.Getenv("DEBUG") == "true"
+	if !debug {
+		log.SetOutput(io.Discard)
+	}
+
 	bucket := os.Getenv("BUCKET")
 	if bucket == "" {
 		log.Fatal("BUCKET environment variable is required")
@@ -85,7 +91,7 @@ func main() {
 	}
 
 	imgResizer := resizer.NewResizer()
-	imgResizer.Startup()
+	imgResizer.Startup(debug)
 	defer imgResizer.Shutdown()
 
 	srv := server.NewServer(s3Client, imgResizer, tags, sizes, format)
