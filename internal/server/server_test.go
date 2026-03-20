@@ -340,3 +340,60 @@ func TestServeHTTP_FolderImage_Default(t *testing.T) {
 		t.Errorf("Expected status OK, got %d. Body: %s", w.Code, w.Body.String())
 	}
 }
+
+func TestServeHTTP_NoExtension(t *testing.T) {
+	s3 := &mockS3Client{
+		existsFunc: func(ctx context.Context, key string) (bool, error) { return false, nil },
+	}
+	resizer := &mockResizer{}
+	srv := NewServer(s3, resizer, nil, nil, "")
+
+	// This path matches resizeRegex but has no extension in the last segment
+	req := httptest.NewRequest("GET", "/123/2/images/products/100/100/test-image", nil)
+	w := httptest.NewRecorder()
+
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("Expected status NotFound for path without extension, got %d", w.Code)
+	}
+}
+
+func TestServeHTTP_NoExtension_SimpleImage(t *testing.T) {
+	s3 := &mockS3Client{
+		existsFunc: func(ctx context.Context, key string) (bool, error) { return false, nil },
+	}
+	resizer := &mockResizer{}
+	srv := NewServer(s3, resizer, nil, nil, "")
+
+	// This path matches folderImageRegex but has no extension in the last segment
+	req := httptest.NewRequest("GET", "/123/images/custom/another-image", nil)
+	w := httptest.NewRecorder()
+
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("Expected status NotFound for path without extension, got %d", w.Code)
+	}
+}
+
+func TestServeHTTP_NoExtension_DirectS3(t *testing.T) {
+	s3 := &mockS3Client{
+		existsFunc: func(ctx context.Context, key string) (bool, error) { return true, nil },
+		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
+			return []byte("test-data"), "application/octet-stream", nil
+		},
+	}
+	resizer := &mockResizer{}
+	srv := NewServer(s3, resizer, nil, nil, "")
+
+	// Direct request to an existing S3 object without extension
+	req := httptest.NewRequest("GET", "/some/path/without/extension", nil)
+	w := httptest.NewRecorder()
+
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("Expected status NotFound for path without extension (even if it exists in S3), got %d", w.Code)
+	}
+}

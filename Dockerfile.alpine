@@ -6,7 +6,8 @@ RUN apk add --no-cache \
     git \
     build-base \
     pkgconfig \
-    vips-dev
+    vips-dev \
+    vips-heif
 
 WORKDIR /app
 
@@ -26,6 +27,7 @@ FROM alpine:3.19
 # Install libvips and CA certificates in the final image
 RUN apk add --no-cache \
     vips \
+    vips-heif \
     ca-certificates
 
 # Create a non-root user

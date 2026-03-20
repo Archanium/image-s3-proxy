@@ -48,6 +48,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Received request for key: %s", key)
 
+	// 0. Ensure there is at least one extension in the filename
+	lastSlash := strings.LastIndex(key, "/")
+	filename := key
+	if lastSlash != -1 {
+		filename = key[lastSlash+1:]
+	}
+	if !strings.Contains(filename, ".") {
+		log.Printf("Key %s does not contain an extension in filename %s", key, filename)
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+
 	// 1. Check if the key exists in S3
 	exists, err := s.s3Client.Exists(ctx, key)
 	if err != nil {
