@@ -15,11 +15,11 @@ import (
 
 var (
 	// Regex 1: Resize request for products/blocks
-	resizeRegex = regexp.MustCompile(`^/?(?P<clientId>\d{1,3})(-(?P<group>[\w]+))?/((?P<version>\d{1})?/?)(images/)?(?P<folder>products|blocks)/(?P<width>\d{1,4}[.\d]{0,2})/(?P<height>\d{1,4}[.\d]{0,2})/(?P<path>[\w\.\-]+)$`)
+	resizeRegex = regexp.MustCompile(`^/?(?P<clientId>\d{1,3})(-(?P<group>[\w]+))?/((?P<version>\d{1})?/?)(?P<images>images/)?(?P<folder>products|blocks)/(?P<width>\d{1,4}[.\d]{0,2})/(?P<height>\d{1,4}[.\d]{0,2})/(?P<path>[\w\.\-]+)$`)
 	// Regex 2: File request
 	fileRegex = regexp.MustCompile(`^/?(?P<clientId>\d{1,3})(-(?P<group>[\w]+))?/files/(?P<fileId>\d{1,3})/(?P<path>[\w\.\-]+)$`)
 	// Regex 3: Simple image request (often with format change)
-	folderImageRegex = regexp.MustCompile(`^/?(?P<clientId>\d{1,3})(-(?P<group>[\w]+))?/((?P<version>\d{1})?/?)images/(?P<folder>[^/]+)/(?P<path>[\w\.\-]+)$`)
+	folderImageRegex = regexp.MustCompile(`^/?(?P<clientId>\d{1,3})(-(?P<group>[\w]+))?/((?P<version>\d{1})?/?)(?P<images>images/)(?P<folder>[^/]+)/(?P<path>[\w\.\-]+)$`)
 )
 
 type Server struct {
@@ -155,6 +155,13 @@ func (s *Server) handleResize(w http.ResponseWriter, ctx context.Context, key st
 
 	// Fetch original from S3
 	data, _, err := s.s3Client.Get(ctx, originalKey)
+	if err != nil {
+		// If not found, try alternative mapping: clientId + "/" + "images/" + folder + "/" + path
+		altKey := clientId + "/images/" + folder + "/" + path
+		log.Printf("Original not found at %s, trying alternative mapping: %s", originalKey, altKey)
+		data, _, err = s.s3Client.Get(ctx, altKey)
+	}
+
 	if err != nil {
 		log.Printf("Original not found: %s", originalKey)
 		http.Error(w, "Original not found", http.StatusNotFound)
