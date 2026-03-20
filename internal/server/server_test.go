@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"image-proxy/internal/types"
 	"net/http"
 	"net/http/httptest"
@@ -184,5 +185,97 @@ func TestRegexMatching(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSpecificURLMapping(t *testing.T) {
+	requestedKey := "9/3/images/blocks/2000/0/prespring-forside-4196157.png.webp"
+	expectedOriginalKey1 := "9/catalog/blocks/images/prespring-forside-4196157.png"
+	expectedOriginalKey2 := "9/images/blocks/prespring-forside-4196157.png"
+
+	var capturedKeys []string
+	s3 := &mockS3Client{
+		existsFunc: func(ctx context.Context, key string) (bool, error) { return false, nil },
+		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
+			capturedKeys = append(capturedKeys, key)
+			if key == expectedOriginalKey2 {
+				return []byte("original-data"), "image/png", nil
+			}
+			return nil, "", errors.New("NotFound")
+		},
+		putFunc: func(ctx context.Context, key string, data []byte, contentType string, tags map[string]string) error {
+			return nil
+		},
+	}
+	resizer := &mockResizer{
+		resizeFunc: func(data []byte, opts types.ImageOptions) ([]byte, string, error) {
+			if opts.Width != 2000 || opts.Height != 0 || opts.Version != 3 || opts.Format != "webp" {
+				t.Errorf("Unexpected resize options: %+v", opts)
+			}
+			return []byte("resized-data"), "image/webp", nil
+		},
+	}
+	srv := NewServer(s3, resizer, nil, nil, "")
+
+	req := httptest.NewRequest("GET", "/"+requestedKey, nil)
+	w := httptest.NewRecorder()
+
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status OK, got %d", w.Code)
+	}
+
+	found1 := false
+	found2 := false
+	for _, k := range capturedKeys {
+		if k == expectedOriginalKey1 {
+			found1 = true
+		}
+		if k == expectedOriginalKey2 {
+			found2 = true
+		}
+	}
+
+	if !found1 {
+		t.Errorf("Expected to try original key %s", expectedOriginalKey1)
+	}
+	if !found2 {
+		t.Errorf("Expected to try alternative key %s", expectedOriginalKey2)
+	}
+}
+
+func TestSpecificURLMapping_NoMiddleExtension(t *testing.T) {
+	requestedKey := "9/3/images/blocks/2000/0/prespring-forside-4196157.webp"
+	expectedOriginalKey := "9/images/blocks/prespring-forside-4196157" // WITHOUT .webp
+
+	var capturedKeys []string
+	s3 := &mockS3Client{
+		existsFunc: func(ctx context.Context, key string) (bool, error) { return false, nil },
+		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
+			capturedKeys = append(capturedKeys, key)
+			if key == expectedOriginalKey {
+				return []byte("original-data"), "image/png", nil
+			}
+			return nil, "", errors.New("NotFound")
+		},
+		putFunc: func(ctx context.Context, key string, data []byte, contentType string, tags map[string]string) error {
+			return nil
+		},
+	}
+	resizer := &mockResizer{
+		resizeFunc: func(data []byte, opts types.ImageOptions) ([]byte, string, error) {
+			return []byte("resized-data"), "image/webp", nil
+		},
+	}
+	srv := NewServer(s3, resizer, nil, nil, "")
+
+	req := httptest.NewRequest("GET", "/"+requestedKey, nil)
+	w := httptest.NewRecorder()
+
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status OK, got %d. Tried keys: %v", w.Code, capturedKeys)
 	}
 }

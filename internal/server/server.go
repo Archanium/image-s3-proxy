@@ -7,7 +7,6 @@ import (
 	"image-proxy/internal/worker"
 	"log"
 	"net/http"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -71,7 +70,23 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 2. If not found, try to match patterns for resizing
 	if match := getNamedGroups(resizeRegex, key); match != nil {
 		log.Printf("Key %s matched resize regex", key)
-		s.handleResize(w, ctx, key, match, 1)
+		normalizedKey := s.getNormalizedKey(match, 1)
+		if normalizedKey != key {
+			log.Printf("Normalized key: %s", normalizedKey)
+			// Check if the normalized key exists in S3
+			exists, err := s.s3Client.Exists(ctx, normalizedKey)
+			if err == nil && exists {
+				log.Printf("Normalized key %s found in S3, serving", normalizedKey)
+				data, contentType, err := s.s3Client.Get(ctx, normalizedKey)
+				if err == nil {
+					w.Header().Set("Content-Type", contentType)
+					w.Header().Set("Cache-Control", "max-age=31536000")
+					w.Write(data)
+					return
+				}
+			}
+		}
+		s.handleResize(w, ctx, normalizedKey, match, 1)
 		return
 	}
 
@@ -83,7 +98,23 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if match := getNamedGroups(folderImageRegex, key); match != nil {
 		log.Printf("Key %s matched folder image regex", key)
-		s.handleResize(w, ctx, key, match, 3)
+		normalizedKey := s.getNormalizedKey(match, 3)
+		if normalizedKey != key {
+			log.Printf("Normalized key: %s", normalizedKey)
+			// Check if the normalized key exists in S3
+			exists, err := s.s3Client.Exists(ctx, normalizedKey)
+			if err == nil && exists {
+				log.Printf("Normalized key %s found in S3, serving", normalizedKey)
+				data, contentType, err := s.s3Client.Get(ctx, normalizedKey)
+				if err == nil {
+					w.Header().Set("Content-Type", contentType)
+					w.Header().Set("Cache-Control", "max-age=31536000")
+					w.Write(data)
+					return
+				}
+			}
+		}
+		s.handleResize(w, ctx, normalizedKey, match, 3)
 		return
 	}
 
@@ -105,32 +136,13 @@ func (s *Server) handleResize(w http.ResponseWriter, ctx context.Context, key st
 		version, _ = strconv.Atoi(versionStr)
 	}
 
-	// Extract format and actual path from filename
-	ext := filepath.Ext(path) // e.g. .webp
-	format := strings.TrimPrefix(ext, ".")
-	basePath := strings.TrimSuffix(path, ext)
-
-	// If there are multiple extensions (e.g. image.jpg.webp)
-	if strings.Contains(basePath, ".") {
-		// Sharp logic: if multiple dots, pop the last one as format
-		// path parts for image.jpg.webp -> [image, jpg, webp]
-		// path = image.jpg, format = webp
-		// originalKey will use image.jpg
-	} else {
-		// If only one extension, it's just the image
-		// But in originalKey we might need the original format if it was different.
-		// However, the Node.js code seems to use groups.path as-is for originalKey
-		// if it doesn't do the popping logic.
-	}
-
-	// Replicate popping logic
+	var format string
+	// Replicate popping logic: the last extension is the requested format, the rest is the path to the original
 	pathParts := strings.Split(path, ".")
-	if len(pathParts) > 2 {
+	if len(pathParts) >= 2 {
 		format = pathParts[len(pathParts)-1]
 		pathParts = pathParts[:len(pathParts)-1]
 		path = strings.Join(pathParts, ".")
-	} else if len(pathParts) == 2 {
-		format = pathParts[1]
 	}
 
 	originalKey = clientId + "/catalog/" + folder + "/images/" + path
@@ -238,6 +250,39 @@ func (s *Server) handleWorkerTrigger(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusAccepted)
 	w.Write([]byte("Accepted"))
+}
+
+func (s *Server) getNormalizedKey(groups map[string]string, regexType int) string {
+	clientId := groups["clientId"]
+	group := groups["group"]
+	images := groups["images"]
+	folder := groups["folder"]
+	path := groups["path"]
+
+	var sb strings.Builder
+	sb.WriteString(clientId)
+	if group != "" {
+		sb.WriteString("-")
+		sb.WriteString(group)
+	}
+	sb.WriteString("/")
+	// Skip version
+	if images != "" {
+		sb.WriteString(images)
+	}
+	if regexType == 1 {
+		sb.WriteString(folder)
+		sb.WriteString("/")
+		sb.WriteString(groups["width"])
+		sb.WriteString("/")
+		sb.WriteString(groups["height"])
+		sb.WriteString("/")
+	} else if regexType == 3 {
+		sb.WriteString(folder)
+		sb.WriteString("/")
+	}
+	sb.WriteString(path)
+	return sb.String()
 }
 
 func getNamedGroups(re *regexp.Regexp, s string) map[string]string {
