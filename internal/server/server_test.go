@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image-proxy/internal/types"
 	"net/http"
 	"net/http/httptest"
@@ -277,5 +278,65 @@ func TestSpecificURLMapping_NoMiddleExtension(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Errorf("Expected status OK, got %d. Tried keys: %v", w.Code, capturedKeys)
+	}
+}
+
+func TestServeHTTP_Resize_Zero(t *testing.T) {
+	s3 := &mockS3Client{
+		existsFunc: func(ctx context.Context, key string) (bool, error) { return false, nil },
+		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
+			return []byte("original-data"), "image/jpeg", nil
+		},
+		putFunc: func(ctx context.Context, key string, data []byte, contentType string, tags map[string]string) error {
+			return nil
+		},
+	}
+	resizer := &mockResizer{
+		resizeFunc: func(data []byte, opts types.ImageOptions) ([]byte, string, error) {
+			if opts.Width == 2560 && opts.Height == 0 {
+				return []byte("resized-data"), "image/webp", nil
+			}
+			return nil, "", fmt.Errorf("unexpected dimensions: %dx%d", opts.Width, opts.Height)
+		},
+	}
+	srv := NewServer(s3, resizer, nil, nil, "")
+
+	req := httptest.NewRequest("GET", "/123/2/images/products/0/0/test-image.jpg.webp", nil)
+	w := httptest.NewRecorder()
+
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status OK, got %d. Body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestServeHTTP_FolderImage_Default(t *testing.T) {
+	s3 := &mockS3Client{
+		existsFunc: func(ctx context.Context, key string) (bool, error) { return false, nil },
+		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
+			return []byte("original-data"), "image/jpeg", nil
+		},
+		putFunc: func(ctx context.Context, key string, data []byte, contentType string, tags map[string]string) error {
+			return nil
+		},
+	}
+	resizer := &mockResizer{
+		resizeFunc: func(data []byte, opts types.ImageOptions) ([]byte, string, error) {
+			if opts.Width == 2560 && opts.Height == 0 {
+				return []byte("resized-data"), "image/webp", nil
+			}
+			return nil, "", fmt.Errorf("unexpected dimensions: %dx%d", opts.Width, opts.Height)
+		},
+	}
+	srv := NewServer(s3, resizer, nil, nil, "")
+
+	req := httptest.NewRequest("GET", "/123/images/custom/test-image.jpg.webp", nil)
+	w := httptest.NewRecorder()
+
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status OK, got %d. Body: %s", w.Code, w.Body.String())
 	}
 }

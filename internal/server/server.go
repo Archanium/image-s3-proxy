@@ -155,12 +155,13 @@ func (s *Server) handleResize(w http.ResponseWriter, ctx context.Context, key st
 		hVal, _ := strconv.Atoi(groups["height"])
 		if wVal == 0 && hVal == 0 {
 			wVal = 2560
+			hVal = 0
 		}
 		opts.Width = wVal
 		opts.Height = hVal
 		opts.Fit = "contain" // Default for Regex 1 in Node.js
 	} else if regexType == 3 {
-		opts.Width = 2000
+		opts.Width = 2560
 		opts.Height = 0
 		opts.Fit = "inside"
 	}

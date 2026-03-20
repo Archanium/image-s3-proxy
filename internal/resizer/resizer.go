@@ -44,6 +44,13 @@ func (r *LibvipsResizer) Resize(data []byte, opts types.ImageOptions) ([]byte, s
 	width := opts.Width
 	height := opts.Height
 
+	if width <= 0 {
+		width = 10000000
+	}
+	if height <= 0 {
+		height = 10000000
+	}
+
 	// Handle version 1 logic (simple resize)
 	if opts.Version == 1 {
 		err = image.Thumbnail(width, height, vips.InterestingNone)
