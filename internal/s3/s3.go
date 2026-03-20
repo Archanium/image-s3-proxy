@@ -15,9 +15,17 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
+type s3API interface {
+	HeadObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
+	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+	PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
+}
+
 type Client struct {
-	client *s3.Client
-	bucket string
+	client         s3API
+	bucket         string
+	defaultTags    map[string]string
+	fallbackClient *Client
 }
 
 func NewClient(ctx context.Context, bucket, region, accessKey, secretKey, endpoint string) (*Client, error) {
@@ -59,6 +67,14 @@ func NewClient(ctx context.Context, bucket, region, accessKey, secretKey, endpoi
 	}, nil
 }
 
+func (c *Client) SetFallback(fallback *Client) {
+	c.fallbackClient = fallback
+}
+
+func (c *Client) SetDefaultTags(tags map[string]string) {
+	c.defaultTags = tags
+}
+
 func (c *Client) Exists(ctx context.Context, key string) (bool, error) {
 	_, err := c.client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(c.bucket),
@@ -66,6 +82,19 @@ func (c *Client) Exists(ctx context.Context, key string) (bool, error) {
 	})
 	if err != nil {
 		if strings.Contains(err.Error(), "NotFound") || strings.Contains(err.Error(), "NoSuchKey") {
+			// Check fallback if configured
+			if c.fallbackClient != nil {
+				log.Printf("Not found in primary bucket %s, checking fallback bucket %s for existence", c.bucket, c.fallbackClient.bucket)
+				exists, fallbackErr := c.fallbackClient.Exists(ctx, key)
+				// If not found in fallback with original key, try stripping the first prefix (clientId)
+				if fallbackErr == nil && !exists {
+					if parts := strings.SplitN(key, "/", 2); len(parts) > 1 {
+						log.Printf("Not found in fallback with original key, checking fallback bucket %s for stripped key: %s", c.fallbackClient.bucket, parts[1])
+						return c.fallbackClient.Exists(ctx, parts[1])
+					}
+				}
+				return exists, fallbackErr
+			}
 			return false, nil
 		}
 		// In AWS SDK v2, errors are usually types.NotFound or types.NoSuchKey but HeadObject might return 404
@@ -81,6 +110,28 @@ func (c *Client) Get(ctx context.Context, key string) ([]byte, string, error) {
 		Key:    aws.String(key),
 	})
 	if err != nil {
+		if (strings.Contains(err.Error(), "NotFound") || strings.Contains(err.Error(), "NoSuchKey")) && c.fallbackClient != nil {
+			log.Printf("Not found in primary bucket %s, trying fallback bucket %s", c.bucket, c.fallbackClient.bucket)
+			data, contentType, fallbackErr := c.fallbackClient.Get(ctx, key)
+
+			// If not found in fallback with original key, try stripping the first prefix (clientId)
+			if fallbackErr != nil && (strings.Contains(fallbackErr.Error(), "NotFound") || strings.Contains(fallbackErr.Error(), "NoSuchKey")) {
+				if parts := strings.SplitN(key, "/", 2); len(parts) > 1 {
+					log.Printf("Not found in fallback bucket %s with original key, trying stripped key: %s", c.fallbackClient.bucket, parts[1])
+					data, contentType, fallbackErr = c.fallbackClient.Get(ctx, parts[1])
+				}
+			}
+
+			if fallbackErr == nil {
+				log.Printf("Found in fallback bucket, moving to primary bucket: %s", key)
+				// Save it back to the primary bucket for future requests
+				if putErr := c.Put(ctx, key, data, contentType, c.defaultTags); putErr != nil {
+					log.Printf("Warning: Failed to move object to primary bucket %s: %v", c.bucket, putErr)
+				}
+				return data, contentType, nil
+			}
+			return nil, "", fallbackErr
+		}
 		log.Printf("Failed to get object from S3: %v", err)
 		return nil, "", err
 	}

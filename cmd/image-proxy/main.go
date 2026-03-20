@@ -62,6 +62,27 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize S3 client: %v", err)
 	}
+	s3Client.SetDefaultTags(tags)
+
+	// Optional fallback client for migration
+	oldBucket := os.Getenv("OLD_S3_BUCKET")
+	if oldBucket != "" {
+		oldRegion := os.Getenv("OLD_S3_REGION")
+		if oldRegion == "" {
+			oldRegion = region
+		}
+		oldAccessKey := os.Getenv("OLD_S3_ACCESS_KEY_ID")
+		oldSecretKey := os.Getenv("OLD_S3_SECRET_ACCESS_KEY")
+		oldEndpoint := os.Getenv("OLD_S3_ENDPOINT")
+
+		log.Printf("Initializing fallback S3 client for bucket: %s", oldBucket)
+		fallbackClient, err := s3.NewClient(ctx, oldBucket, oldRegion, oldAccessKey, oldSecretKey, oldEndpoint)
+		if err != nil {
+			log.Printf("Warning: Failed to initialize fallback S3 client: %v", err)
+		} else {
+			s3Client.SetFallback(fallbackClient)
+		}
+	}
 
 	imgResizer := resizer.NewResizer()
 	imgResizer.Startup()
