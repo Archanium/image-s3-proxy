@@ -67,6 +67,9 @@ func TestServeHTTP_ExistingFile(t *testing.T) {
 	if w.Header().Get("Content-Type") != "image/jpeg" {
 		t.Errorf("Expected content type image/jpeg, got %s", w.Header().Get("Content-Type"))
 	}
+	if w.Header().Get("Cache-Control") != "max-age=31536000" {
+		t.Errorf("Expected Cache-Control max-age=31536000, got %s", w.Header().Get("Cache-Control"))
+	}
 }
 
 func TestServeHTTP_Resize(t *testing.T) {
@@ -84,6 +87,9 @@ func TestServeHTTP_Resize(t *testing.T) {
 	}
 	resizer := &mockResizer{
 		resizeFunc: func(data []byte, opts types.ImageOptions) ([]byte, string, error) {
+			if opts.Version != 2 || opts.Fit != "contain" {
+				return nil, "", fmt.Errorf("unexpected opts: version=%d, fit=%s", opts.Version, opts.Fit)
+			}
 			return []byte("resized-data"), "image/webp", nil
 		},
 	}
@@ -99,6 +105,9 @@ func TestServeHTTP_Resize(t *testing.T) {
 	}
 	if w.Header().Get("Content-Type") != "image/webp" {
 		t.Errorf("Expected content type image/webp, got %s", w.Header().Get("Content-Type"))
+	}
+	if w.Header().Get("Cache-Control") != "max-age=31536000" {
+		t.Errorf("Expected Cache-Control max-age=31536000, got %s", w.Header().Get("Cache-Control"))
 	}
 }
 
@@ -258,7 +267,7 @@ func TestSpecificURLMapping(t *testing.T) {
 
 func TestSpecificURLMapping_NoMiddleExtension(t *testing.T) {
 	requestedKey := "9/3/images/blocks/2000/0/prespring-forside-4196157.webp"
-	expectedOriginalKey := "9/images/blocks/prespring-forside-4196157" // WITHOUT .webp
+	expectedOriginalKey := "9/images/blocks/prespring-forside-4196157.webp" // With .webp
 
 	var capturedKeys []string
 	s3 := &mockS3Client{
@@ -276,6 +285,9 @@ func TestSpecificURLMapping_NoMiddleExtension(t *testing.T) {
 	}
 	resizer := &mockResizer{
 		resizeFunc: func(data []byte, opts types.ImageOptions) ([]byte, string, error) {
+			if opts.Version != 3 || opts.Fit != "contain" {
+				return nil, "", fmt.Errorf("unexpected opts: version=%d, fit=%s", opts.Version, opts.Fit)
+			}
 			return []byte("resized-data"), "image/webp", nil
 		},
 	}
@@ -405,5 +417,127 @@ func TestServeHTTP_NoExtension_DirectS3(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("Expected status NotFound for path without extension (even if it exists in S3), got %d", w.Code)
+	}
+}
+
+func TestErrorCaching(t *testing.T) {
+	s3 := &mockS3Client{
+		existsFunc: func(ctx context.Context, key string) (bool, error) { return false, nil },
+		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
+			return nil, "", http.ErrNoLocation // Just some error
+		},
+	}
+	resizer := &mockResizer{}
+	srv := NewServer(s3, resizer, nil, nil, "")
+
+	tests := []struct {
+		name   string
+		path   string
+		status int
+	}{
+		{"NotFound - No extension", "/123/2/images/products/100/100/test-image", http.StatusNotFound},
+		{"NotFound - No pattern match", "/invalid/path.jpg", http.StatusNotFound},
+		{"NotFound - Original not found", "/123/2/images/products/100/100/notfound.jpg.webp", http.StatusNotFound},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", tt.path, nil)
+			w := httptest.NewRecorder()
+			srv.ServeHTTP(w, req)
+
+			if w.Code != tt.status {
+				t.Errorf("Expected status %d, got %d", tt.status, w.Code)
+			}
+
+			cacheControl := w.Header().Get("Cache-Control")
+			expected := "max-age=30"
+			if cacheControl != expected {
+				t.Errorf("Expected Cache-Control: %s, got %s", expected, cacheControl)
+			}
+		})
+	}
+}
+
+func TestExtensionHandling(t *testing.T) {
+	tests := []struct {
+		name                string
+		requestedKey        string
+		expectedOriginalKey string
+		expectedFormat      string
+	}{
+		{
+			name:                "Single extension - webp",
+			requestedKey:        "/123/2/images/products/100/100/image.webp",
+			expectedOriginalKey: "123/catalog/products/images/image.webp",
+			expectedFormat:      "webp",
+		},
+		{
+			name:                "Double extension - png.webp",
+			requestedKey:        "/123/2/images/products/100/100/test.png.webp",
+			expectedOriginalKey: "123/catalog/products/images/test.png",
+			expectedFormat:      "webp",
+		},
+		{
+			name:                "Single extension - jpg",
+			requestedKey:        "/123/2/images/products/100/100/image.jpg",
+			expectedOriginalKey: "123/catalog/products/images/image.jpg",
+			expectedFormat:      "jpg",
+		},
+		{
+			name:                "Triple extension - test.jpg.png.webp",
+			requestedKey:        "/123/2/images/products/100/100/test.jpg.png.webp",
+			expectedOriginalKey: "123/catalog/products/images/test.jpg.png",
+			expectedFormat:      "webp",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var capturedOriginalKey string
+			var capturedFormat string
+
+			s3 := &mockS3Client{
+				existsFunc: func(ctx context.Context, key string) (bool, error) { return false, nil },
+				getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
+					// We only care about the first attempt to get the original
+					if capturedOriginalKey == "" {
+						capturedOriginalKey = key
+					}
+					if key == tt.expectedOriginalKey {
+						return []byte("original-data"), "image/jpeg", nil
+					}
+					return nil, "", fmt.Errorf("NotFound: %s", key)
+				},
+				putFunc: func(ctx context.Context, key string, data []byte, contentType string, tags map[string]string) error {
+					return nil
+				},
+			}
+
+			resizer := &mockResizer{
+				resizeFunc: func(data []byte, opts types.ImageOptions) ([]byte, string, error) {
+					capturedFormat = opts.Format
+					return []byte("resized-data"), "image/webp", nil
+				},
+			}
+
+			srv := NewServer(s3, resizer, nil, nil, "")
+			req := httptest.NewRequest("GET", tt.requestedKey, nil)
+			w := httptest.NewRecorder()
+
+			srv.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("Expected status OK, got %d. OriginalKey tried: %s", w.Code, capturedOriginalKey)
+			}
+
+			if capturedOriginalKey != tt.expectedOriginalKey {
+				t.Errorf("Expected original key %s, got %s", tt.expectedOriginalKey, capturedOriginalKey)
+			}
+
+			if capturedFormat != tt.expectedFormat {
+				t.Errorf("Expected format %s, got %s", tt.expectedFormat, capturedFormat)
+			}
+		})
 	}
 }

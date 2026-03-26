@@ -6,7 +6,6 @@ import (
 	"image-proxy/internal/resizer"
 	"image-proxy/internal/s3"
 	"image-proxy/internal/server"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -15,9 +14,9 @@ import (
 
 func main() {
 	debug := os.Getenv("DEBUG") == "true"
-	if !debug {
-		log.SetOutput(io.Discard)
-	}
+	//if !debug {
+	//	log.SetOutput(io.Discard)
+	//}
 
 	bucket := os.Getenv("BUCKET")
 	if bucket == "" {

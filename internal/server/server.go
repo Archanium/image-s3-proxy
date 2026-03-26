@@ -56,7 +56,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if !strings.Contains(filename, ".") {
 		log.Printf("Key %s does not contain an extension in filename %s", key, filename)
-		http.Error(w, "Not Found", http.StatusNotFound)
+		s.httpError(w, "Not Found", http.StatusNotFound)
 		return
 	}
 
@@ -132,7 +132,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Key %s did not match any pattern", key)
 	// 3. Not found and no pattern matches
-	http.Error(w, "Not Found", http.StatusNotFound)
+	s.httpError(w, "Not Found", http.StatusNotFound)
 }
 
 func (s *Server) handleResize(w http.ResponseWriter, ctx context.Context, key string, groups map[string]string, regexType int) {
@@ -144,17 +144,23 @@ func (s *Server) handleResize(w http.ResponseWriter, ctx context.Context, key st
 	versionStr := groups["version"]
 	clientId := groups["clientId"]
 	version := 1
+	if regexType == 3 {
+		version = 0
+	}
 	if versionStr != "" {
 		version, _ = strconv.Atoi(versionStr)
 	}
 
 	var format string
-	// Replicate popping logic: the last extension is the requested format, the rest is the path to the original
+	// Always the last extension is the format
 	pathParts := strings.Split(path, ".")
 	if len(pathParts) >= 2 {
 		format = pathParts[len(pathParts)-1]
-		pathParts = pathParts[:len(pathParts)-1]
-		path = strings.Join(pathParts, ".")
+		// Only strip the extension if it named like ".png.webp" (3 or more parts)
+		if len(pathParts) > 2 {
+			pathParts = pathParts[:len(pathParts)-1]
+			path = strings.Join(pathParts, ".")
+		}
 	}
 
 	originalKey = clientId + "/catalog/" + folder + "/images/" + path
@@ -171,7 +177,11 @@ func (s *Server) handleResize(w http.ResponseWriter, ctx context.Context, key st
 		}
 		opts.Width = wVal
 		opts.Height = hVal
-		opts.Fit = "contain" // Default for Regex 1 in Node.js
+		if opts.Version == 1 {
+			opts.Fit = "cover"
+		} else {
+			opts.Fit = "contain" // Default for Regex 1 in Node.js (Version 2/3)
+		}
 	} else if regexType == 3 {
 		opts.Width = 2560
 		opts.Height = 0
@@ -179,17 +189,30 @@ func (s *Server) handleResize(w http.ResponseWriter, ctx context.Context, key st
 	}
 
 	// Fetch original from S3
-	data, _, err := s.s3Client.Get(ctx, originalKey)
-	if err != nil {
-		// If not found, try alternative mapping: clientId + "/" + "images/" + folder + "/" + path
-		altKey := clientId + "/images/" + folder + "/" + path
-		log.Printf("Original not found at %s, trying alternative mapping: %s", originalKey, altKey)
-		data, _, err = s.s3Client.Get(ctx, altKey)
+	var data []byte
+	var err error
+
+	// Try multiple possible locations for the original image
+	keysToTry := []string{originalKey}
+	if format != "" {
+		keysToTry = append(keysToTry, originalKey+"."+format)
+	}
+	altKey := clientId + "/images/" + folder + "/" + path
+	keysToTry = append(keysToTry, altKey)
+	if format != "" {
+		keysToTry = append(keysToTry, altKey+"."+format)
+	}
+
+	for _, k := range keysToTry {
+		data, _, err = s.s3Client.Get(ctx, k)
+		if err == nil {
+			break
+		}
 	}
 
 	if err != nil {
-		log.Printf("Original not found: %s", originalKey)
-		http.Error(w, "Original not found", http.StatusNotFound)
+		log.Printf("Original not found after trying keys: %v", keysToTry)
+		s.httpError(w, "Original not found", http.StatusNotFound)
 		return
 	}
 
@@ -197,7 +220,7 @@ func (s *Server) handleResize(w http.ResponseWriter, ctx context.Context, key st
 	resizedData, contentType, err := s.resizer.Resize(data, opts)
 	if err != nil {
 		log.Printf("Resize error: %v", err)
-		http.Error(w, "Resize error", http.StatusInternalServerError)
+		s.httpError(w, "Resize error", http.StatusInternalServerError)
 		return
 	}
 
@@ -213,6 +236,11 @@ func (s *Server) handleResize(w http.ResponseWriter, ctx context.Context, key st
 	w.Write(resizedData)
 }
 
+func (s *Server) httpError(w http.ResponseWriter, error string, code int) {
+	w.Header().Set("Cache-Control", "max-age=30")
+	http.Error(w, error, code)
+}
+
 func (s *Server) handleFile(w http.ResponseWriter, ctx context.Context, key string, groups map[string]string) {
 	fileId := groups["fileId"]
 	path := groups["path"]
@@ -221,7 +249,7 @@ func (s *Server) handleFile(w http.ResponseWriter, ctx context.Context, key stri
 
 	data, contentType, err := s.s3Client.Get(ctx, originalKey)
 	if err != nil {
-		http.Error(w, "File not found", http.StatusNotFound)
+		s.httpError(w, "File not found", http.StatusNotFound)
 		return
 	}
 
@@ -245,12 +273,12 @@ func (s *Server) handleWorkerTrigger(w http.ResponseWriter, r *http.Request) {
 		Key string `json:"key"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		s.httpError(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
 	if payload.Key == "" {
-		http.Error(w, "Missing key in payload", http.StatusBadRequest)
+		s.httpError(w, "Missing key in payload", http.StatusBadRequest)
 		return
 	}
 

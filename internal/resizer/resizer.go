@@ -56,27 +56,36 @@ func (r *LibvipsResizer) Resize(data []byte, opts types.ImageOptions) ([]byte, s
 		height = 10000000
 	}
 
-	// Handle version 1 logic (simple resize)
-	if opts.Version == 1 {
-		err = image.Thumbnail(width, height, vips.InterestingNone)
-		if err != nil {
-			return nil, "", err
-		}
-	} else {
-		// Version 2/3 logic
-		interesting := vips.InterestingNone
-		if opts.Fit == "cover" {
-			interesting = vips.InterestingAll
-		}
+	// Handle version logic
+	interesting := vips.InterestingNone
+	if opts.Fit == "cover" {
+		interesting = vips.InterestingCentre
+	}
 
-		// govips.Thumbnail uses "inside" by default if no crop is specified
-		// If width or height is 0, it preserves aspect ratio.
-		err = image.Thumbnail(width, height, interesting)
-		if err != nil {
-			return nil, "", err
-		}
+	err = image.Thumbnail(width, height, interesting)
+	if err != nil {
+		return nil, "", err
+	}
 
-		// Handle alpha/background
+	// Handle "contain" padding if both dimensions were provided
+	if opts.Fit == "contain" && opts.Width > 0 && opts.Height > 0 {
+		currW := image.Width()
+		currH := image.Height()
+		if currW != opts.Width || currH != opts.Height {
+			left := (opts.Width - currW) / 2
+			top := (opts.Height - currH) / 2
+			extend := vips.ExtendWhite // Default to white for Version 2/3 behavior
+			// If keepAlpha is true, maybe use ExtendBackground?
+			// But Node.js default for contain uses white.
+			err = image.Embed(left, top, opts.Width, opts.Height, extend)
+			if err != nil {
+				return nil, "", fmt.Errorf("failed to embed image: %w", err)
+			}
+		}
+	}
+
+	if opts.Version != 1 {
+		// Version 2/3 logic: Handle alpha/background
 		if (!opts.KeepAlpha || opts.Format == "jpg") && image.HasAlpha() {
 			err = image.Flatten(&vips.Color{R: 255, G: 255, B: 255})
 			if err != nil {
@@ -92,6 +101,7 @@ func (r *LibvipsResizer) Resize(data []byte, opts types.ImageOptions) ([]byte, s
 	switch strings.ToLower(opts.Format) {
 	case "png":
 		params := vips.NewPngExportParams()
+		params.Interlace = true
 		buf, _, err = image.ExportPng(params)
 		contentType = "image/png"
 	case "webp":
@@ -104,11 +114,15 @@ func (r *LibvipsResizer) Resize(data []byte, opts types.ImageOptions) ([]byte, s
 		contentType = "image/avif"
 	case "jpg", "jpeg":
 		params := vips.NewJpegExportParams()
+		params.Interlace = true
+		params.OptimizeCoding = true
 		buf, _, err = image.ExportJpeg(params)
 		contentType = "image/jpeg"
 	default:
 		// Default to original format if not specified, or JPEG
 		params := vips.NewJpegExportParams()
+		params.Interlace = true
+		params.OptimizeCoding = true
 		buf, _, err = image.ExportJpeg(params)
 		contentType = "image/jpeg"
 	}

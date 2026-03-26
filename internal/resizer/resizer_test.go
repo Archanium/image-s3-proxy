@@ -55,6 +55,24 @@ func TestResize(t *testing.T) {
 			expWidth:  2560,
 			expHeight: 1152,
 		},
+		{
+			name:      "1000x1000 Version 1 (Cover/Crop)",
+			opts:      types.ImageOptions{Width: 1000, Height: 1000, Version: 1, Fit: "cover", Format: "png"},
+			expWidth:  1000,
+			expHeight: 1000,
+		},
+		{
+			name:      "1000x1000 Version 2 (Contain/Pad)",
+			opts:      types.ImageOptions{Width: 1000, Height: 1000, Version: 2, Fit: "contain", Format: "png"},
+			expWidth:  1000,
+			expHeight: 1000,
+		},
+		{
+			name:      "1000x1000 Version 2 (Inside/No Pad)",
+			opts:      types.ImageOptions{Width: 1000, Height: 1000, Version: 2, Fit: "inside", Format: "png"},
+			expWidth:  1000,
+			expHeight: 450,
+		},
 	}
 
 	for _, tt := range tests {
