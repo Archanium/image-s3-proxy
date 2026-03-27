@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -62,6 +63,10 @@ func main() {
 
 	format := os.Getenv("FORMAT")
 
+	concurrency, _ := strconv.Atoi(os.Getenv("VIPS_CONCURRENCY"))
+	maxCacheMem, _ := strconv.Atoi(os.Getenv("VIPS_MAX_CACHE_MEM"))
+	maxCacheSize, _ := strconv.Atoi(os.Getenv("VIPS_MAX_CACHE_SIZE"))
+
 	ctx := context.Background()
 	s3Client, err := s3.NewClient(ctx, bucket, region, accessKey, secretKey, endpoint)
 	if err != nil {
@@ -90,7 +95,7 @@ func main() {
 	}
 
 	imgResizer := resizer.NewResizer()
-	imgResizer.Startup(debug)
+	imgResizer.Startup(debug, concurrency, maxCacheMem, maxCacheSize)
 	defer imgResizer.Shutdown()
 
 	srv := server.NewServer(s3Client, imgResizer, tags, sizes, format)

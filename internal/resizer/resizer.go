@@ -14,13 +14,19 @@ func NewResizer() *LibvipsResizer {
 	return &LibvipsResizer{}
 }
 
-func (r *LibvipsResizer) Startup(debug bool) {
+func (r *LibvipsResizer) Startup(debug bool, concurrency int, maxCacheMem int, maxCacheSize int) {
 	if !debug {
 		vips.LoggingSettings(func(domain string, level vips.LogLevel, msg string) {
 			// Do nothing
 		}, vips.LogLevelError)
 	}
-	vips.Startup(nil)
+
+	config := &vips.Config{
+		ConcurrencyLevel: concurrency,
+		MaxCacheMem:      maxCacheMem,
+		MaxCacheSize:     maxCacheSize,
+	}
+	vips.Startup(config)
 }
 
 func (r *LibvipsResizer) Shutdown() {
@@ -32,7 +38,7 @@ func (r *LibvipsResizer) Resize(data []byte, opts types.ImageOptions) ([]byte, s
 	var err error
 
 	if opts.IsAnimated {
-		// For animated images (GIF, WebP), we might need to load all pages
+		// For animated images (GIF, WebP, AVIF), we might need to load all pages
 		importParams := vips.NewImportParams()
 		importParams.NumPages.Set(-1)
 		image, err = vips.LoadImageFromBuffer(data, importParams)
@@ -49,11 +55,13 @@ func (r *LibvipsResizer) Resize(data []byte, opts types.ImageOptions) ([]byte, s
 	width := opts.Width
 	height := opts.Height
 
-	if width <= 0 {
-		width = 10000000
-	}
-	if height <= 0 {
-		height = 10000000
+	origW := image.Width()
+	origH := image.Height()
+
+	if width <= 0 && height > 0 {
+		width = int(float64(origW) * float64(height) / float64(origH))
+	} else if height <= 0 && width > 0 {
+		height = int(float64(origH) * float64(width) / float64(origW))
 	}
 
 	// Handle version logic

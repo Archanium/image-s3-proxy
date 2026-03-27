@@ -156,7 +156,7 @@ func (s *Server) handleResize(w http.ResponseWriter, ctx context.Context, key st
 	pathParts := strings.Split(path, ".")
 	if len(pathParts) >= 2 {
 		format = pathParts[len(pathParts)-1]
-		// Only strip the extension if it named like ".png.webp" (3 or more parts)
+		// Only strip the extension if it named like ".png.webp" or ".jpg.avif" (3 or more parts)
 		if len(pathParts) > 2 {
 			pathParts = pathParts[:len(pathParts)-1]
 			path = strings.Join(pathParts, ".")
@@ -193,14 +193,34 @@ func (s *Server) handleResize(w http.ResponseWriter, ctx context.Context, key st
 	var err error
 
 	// Try multiple possible locations for the original image
-	keysToTry := []string{originalKey}
+	var keysToTry []string
+	seen := make(map[string]bool)
+	addKey := func(k string) {
+		if k != "" && !seen[k] {
+			keysToTry = append(keysToTry, k)
+			seen[k] = true
+		}
+	}
+
+	addKey(originalKey)
 	if format != "" {
-		keysToTry = append(keysToTry, originalKey+"."+format)
+		addKey(originalKey + "." + format)
 	}
 	altKey := clientId + "/images/" + folder + "/" + path
-	keysToTry = append(keysToTry, altKey)
+	addKey(altKey)
 	if format != "" {
-		keysToTry = append(keysToTry, altKey+"."+format)
+		addKey(altKey + "." + format)
+	}
+
+	// Fallback: if path has an extension, try common ones
+	if lastDot := strings.LastIndex(path, "."); lastDot > 0 {
+		basePath := path[:lastDot]
+		for _, ext := range []string{"jpg", "jpeg", "png", "webp", "gif", "avif"} {
+			addKey(clientId + "/catalog/" + folder + "/images/" + basePath + "." + ext)
+			addKey(clientId + "/images/" + folder + "/" + basePath + "." + ext)
+		}
+		addKey(clientId + "/catalog/" + folder + "/images/" + basePath)
+		addKey(clientId + "/images/" + folder + "/" + basePath)
 	}
 
 	for _, k := range keysToTry {

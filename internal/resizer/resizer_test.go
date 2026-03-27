@@ -15,7 +15,7 @@ func TestMain(m *testing.M) {
 			// Do nothing
 		}, vips.LogLevelError)
 	}
-	vips.Startup(nil)
+	vips.Startup(&vips.Config{})
 	code := m.Run()
 	vips.Shutdown()
 	os.Exit(code)

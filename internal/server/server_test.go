@@ -490,6 +490,12 @@ func TestExtensionHandling(t *testing.T) {
 			expectedOriginalKey: "123/catalog/products/images/test.jpg.png",
 			expectedFormat:      "webp",
 		},
+		{
+			name:                "Double extension - jpg.avif",
+			requestedKey:        "/123/2/images/products/100/100/image.jpg.avif",
+			expectedOriginalKey: "123/catalog/products/images/image.jpg",
+			expectedFormat:      "avif",
+		},
 	}
 
 	for _, tt := range tests {
