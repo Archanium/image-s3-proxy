@@ -70,7 +70,23 @@ func (r *LibvipsResizer) Resize(data []byte, opts types.ImageOptions) ([]byte, s
 		interesting = vips.InterestingCentre
 	}
 
-	err = image.Thumbnail(width, height, interesting)
+	if opts.Fit == "contain" && opts.Width > 0 && opts.Height > 0 {
+		targetRatio := float64(opts.Width) / float64(opts.Height)
+		origRatio := float64(origW) / float64(origH)
+
+		if origRatio > targetRatio {
+			// Width is limiting
+			height = int(float64(opts.Width) / origRatio)
+			width = opts.Width
+		} else {
+			// Height is limiting
+			width = int(float64(opts.Height) * origRatio)
+			height = opts.Height
+		}
+	}
+
+	// Use ThumbnailWithSize to ensure we don't stretch the image.
+	err = image.ThumbnailWithSize(width, height, interesting, vips.SizeBoth)
 	if err != nil {
 		return nil, "", err
 	}

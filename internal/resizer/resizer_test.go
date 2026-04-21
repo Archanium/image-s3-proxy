@@ -100,6 +100,30 @@ func TestResize(t *testing.T) {
 	}
 }
 
+func TestResizeRectangular(t *testing.T) {
+	r := NewResizer()
+	data, err := os.ReadFile("../../tests/fixtures/montana.png")
+	if err != nil {
+		t.Skip("Fixture not found, skipping test")
+	}
+
+	opts := types.ImageOptions{Width: 152, Height: 255, Version: 2, Fit: "contain", Format: "png"}
+	resized, _, err := r.Resize(data, opts)
+	if err != nil {
+		t.Fatalf("Resize failed: %v", err)
+	}
+
+	img, err := vips.LoadImageFromBuffer(resized, nil)
+	if err != nil {
+		t.Fatalf("Failed to load resized image: %v", err)
+	}
+	defer img.Close()
+
+	if img.Width() != 152 || img.Height() != 255 {
+		t.Errorf("Expected 152x255, got %dx%d", img.Width(), img.Height())
+	}
+}
+
 func TestTransparentToJpg(t *testing.T) {
 	r := NewResizer()
 	data, err := os.ReadFile("../../tests/fixtures/transparent.png")
@@ -123,7 +147,7 @@ func TestTransparentToJpg(t *testing.T) {
 		t.Fatal(err)
 	}
 	// JPEG has 3 channels (R, G, B)
-	if pixel[0] < 250 || pixel[1] < 250 || pixel[2] < 250 {
+	if pixel[0] < 255 || pixel[1] < 255 || pixel[2] < 255 {
 		t.Errorf("Expected white background (255, 255, 255), got (%f, %f, %f)", pixel[0], pixel[1], pixel[2])
 	}
 }
