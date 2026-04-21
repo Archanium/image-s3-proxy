@@ -6,8 +6,6 @@ jobs:
       image: ubuntu-2204:current
     steps:
       - checkout
-      - setup_remote_docker:
-          version: 20.10.14
       - run:
           name: Run Alpine tests
           command: docker-compose run --rm tester
@@ -20,8 +18,6 @@ jobs:
       image: ubuntu-2204:current
     steps:
       - checkout
-      - setup_remote_docker:
-          version: 20.10.14
       - run:
           name: Set up Buildx
           command: |
