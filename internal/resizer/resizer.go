@@ -92,13 +92,11 @@ func (r *LibvipsResizer) Resize(data []byte, opts types.ImageOptions) ([]byte, s
 		}
 	}
 
-	if opts.Version != 1 {
-		// Version 2/3 logic: Handle alpha/background
-		if (!opts.KeepAlpha || opts.Format == "jpg") && image.HasAlpha() {
-			err = image.Flatten(&vips.Color{R: 255, G: 255, B: 255})
-			if err != nil {
-				return nil, "", err
-			}
+	// Handle alpha/background for all versions
+	if (!opts.KeepAlpha || opts.Format == "jpg") && image.HasAlpha() {
+		err = image.Flatten(&vips.Color{R: 255, G: 255, B: 255})
+		if err != nil {
+			return nil, "", err
 		}
 	}
 

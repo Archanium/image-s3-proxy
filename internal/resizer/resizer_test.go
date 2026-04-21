@@ -99,3 +99,31 @@ func TestResize(t *testing.T) {
 		})
 	}
 }
+
+func TestTransparentToJpg(t *testing.T) {
+	r := NewResizer()
+	data, err := os.ReadFile("../../tests/fixtures/transparent.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := types.ImageOptions{Width: 10, Height: 10, Version: 1, Format: "jpg"}
+	resized, _, err := r.Resize(data, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := vips.LoadImageFromBuffer(resized, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer img.Close()
+
+	// Check pixel at 0,0
+	pixel, err := img.GetPoint(0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// JPEG has 3 channels (R, G, B)
+	if pixel[0] < 250 || pixel[1] < 250 || pixel[2] < 250 {
+		t.Errorf("Expected white background (255, 255, 255), got (%f, %f, %f)", pixel[0], pixel[1], pixel[2])
+	}
+}

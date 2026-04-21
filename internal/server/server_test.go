@@ -29,7 +29,10 @@ type mockS3Client struct {
 }
 
 func (m *mockS3Client) Exists(ctx context.Context, key string) (bool, error) {
-	return m.existsFunc(ctx, key)
+	if m.existsFunc != nil {
+		return m.existsFunc(ctx, key)
+	}
+	return false, nil
 }
 func (m *mockS3Client) Get(ctx context.Context, key string) ([]byte, string, error) {
 	return m.getFunc(ctx, key)

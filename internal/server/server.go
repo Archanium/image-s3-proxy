@@ -33,7 +33,7 @@ func NewServer(s3Client types.S3Client, resizer types.Resizer, tags map[string]s
 		s3Client: s3Client,
 		resizer:  resizer,
 		tags:     tags,
-		worker:   worker.NewWorker(s3Client, resizer, tags, sizes, format),
+		worker:   worker.NewWorker(s3Client, nil, resizer, tags, sizes, format, false),
 	}
 }
 
