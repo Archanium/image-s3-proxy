@@ -1,6 +1,20 @@
 version: 2.1
 
 jobs:
+  test:
+    machine:
+      image: ubuntu-2204:current
+    steps:
+      - checkout
+      - setup_remote_docker:
+          version: 20.10.14
+      - run:
+          name: Run Alpine tests
+          command: docker-compose run --rm tester
+      - run:
+          name: Run Debian tests
+          command: docker-compose run --rm tester-debian
+
   build-and-push:
     machine:
       image: ubuntu-2204:current
@@ -33,7 +47,10 @@ workflows:
   version: 2
   build:
     jobs:
+      - test
       - build-and-push:
+          requires:
+            - test
           context: docker_auth
           filters:
             branches:
