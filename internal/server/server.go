@@ -85,18 +85,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		normalizedKey := s.getNormalizedKey(match, 1)
 		if normalizedKey != key {
 			log.Printf("Normalized key: %s", normalizedKey)
-			// Check if the normalized key exists in S3
-			exists, err := s.s3Client.Exists(ctx, normalizedKey)
-			if err == nil && exists {
-				log.Printf("Normalized key %s found in S3, serving", normalizedKey)
-				data, contentType, err := s.s3Client.Get(ctx, normalizedKey)
-				if err == nil {
-					w.Header().Set("Content-Type", contentType)
-					w.Header().Set("Cache-Control", "max-age=31536000")
-					w.Write(data)
-					return
-				}
-			}
 		}
 		s.handleResize(w, ctx, normalizedKey, match, 1)
 		return
