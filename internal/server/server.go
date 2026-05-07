@@ -14,7 +14,7 @@ import (
 
 var (
 	// Regex 1: Resize request for products/blocks
-	resizeRegex = regexp.MustCompile(`^/?(?P<clientId>\d{1,3})(-(?P<group>[\w]+))?/((?P<version>\d{1})?/?)(?P<images>images/)?(?P<folder>products|blocks)/(?P<width>\d{1,4}[.\d]{0,2})/(?P<height>\d{1,4}[.\d]{0,2})/(?P<path>[\w\.\-]+)$`)
+	resizeRegex = regexp.MustCompile(`^/?(?P<clientId>\d{1,3})(-(?P<group>[\w]+))?/((?P<version>\d{1})?/?)(?P<images>images/)?(?P<folder>products|blocks|branding)/(?P<width>\d{1,4}[.\d]{0,2})/(?P<height>\d{1,4}[.\d]{0,2})/(?P<path>[\w\.\-]+)$`)
 	// Regex 2: File request
 	fileRegex = regexp.MustCompile(`^/?(?P<clientId>\d{1,3})(-(?P<group>[\w]+))?/files/(?P<fileId>\d{1,3})/(?P<path>[\w\.\-]+)$`)
 	// Regex 3: Simple image request (often with format change)
@@ -160,7 +160,7 @@ func (s *Server) handleResize(w http.ResponseWriter, ctx context.Context, key st
 		wVal, _ := strconv.Atoi(groups["width"])
 		hVal, _ := strconv.Atoi(groups["height"])
 		if wVal == 0 && hVal == 0 {
-			wVal = 2560
+			wVal = 5120
 			hVal = 0
 		}
 		opts.Width = wVal
@@ -171,7 +171,7 @@ func (s *Server) handleResize(w http.ResponseWriter, ctx context.Context, key st
 			opts.Fit = "contain" // Default for Regex 1 in Node.js (Version 2/3)
 		}
 	} else if regexType == 3 {
-		opts.Width = 2560
+		opts.Width = 5120
 		opts.Height = 0
 		opts.Fit = "inside"
 	}
@@ -307,6 +307,14 @@ func (s *Server) getNormalizedKey(groups map[string]string, regexType int) strin
 	images := groups["images"]
 	folder := groups["folder"]
 	path := groups["path"]
+	version := groups["version"]
+	if version == "" {
+		if regexType == 3 {
+			version = "0"
+		} else {
+			version = "1"
+		}
+	}
 
 	var sb strings.Builder
 	sb.WriteString(clientId)
@@ -315,7 +323,8 @@ func (s *Server) getNormalizedKey(groups map[string]string, regexType int) strin
 		sb.WriteString(group)
 	}
 	sb.WriteString("/")
-	// Skip version
+	sb.WriteString(version)
+	sb.WriteString("/")
 	if images != "" {
 		sb.WriteString(images)
 	}

@@ -318,7 +318,7 @@ func TestServeHTTP_Resize_Zero(t *testing.T) {
 	}
 	resizer := &mockResizer{
 		resizeFunc: func(data []byte, opts types.ImageOptions) ([]byte, string, error) {
-			if opts.Width == 2560 && opts.Height == 0 {
+			if opts.Width == 5120 && opts.Height == 0 {
 				return []byte("resized-data"), "image/webp", nil
 			}
 			return nil, "", fmt.Errorf("unexpected dimensions: %dx%d", opts.Width, opts.Height)
@@ -348,7 +348,7 @@ func TestServeHTTP_FolderImage_Default(t *testing.T) {
 	}
 	resizer := &mockResizer{
 		resizeFunc: func(data []byte, opts types.ImageOptions) ([]byte, string, error) {
-			if opts.Width == 2560 && opts.Height == 0 {
+			if opts.Width == 5120 && opts.Height == 0 {
 				return []byte("resized-data"), "image/webp", nil
 			}
 			return nil, "", fmt.Errorf("unexpected dimensions: %dx%d", opts.Width, opts.Height)
@@ -548,5 +548,158 @@ func TestExtensionHandling(t *testing.T) {
 				t.Errorf("Expected format %s, got %s", tt.expectedFormat, capturedFormat)
 			}
 		})
+	}
+}
+
+func TestServeHTTP_BrandingResize_AttemptsResizeAndCachesWhenMissing(t *testing.T) {
+	requestedKey := "39/3/images/branding/350/438/byflou-com-logo.jpeg"
+	expectedOriginalKey := "39/catalog/branding/images/byflou-com-logo.jpeg"
+
+	var existsKeys []string
+	var getKeys []string
+	var putKey string
+	var putData []byte
+	var putContentType string
+	var resized bool
+
+	s3 := &mockS3Client{
+		existsFunc: func(ctx context.Context, key string) (bool, error) {
+			existsKeys = append(existsKeys, key)
+			return false, nil
+		},
+		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
+			getKeys = append(getKeys, key)
+			if key == expectedOriginalKey {
+				return []byte("original-branding-logo"), "image/jpeg", nil
+			}
+			return nil, "", errors.New("not found")
+		},
+		putFunc: func(ctx context.Context, key string, data []byte, contentType string, tags map[string]string) error {
+			putKey = key
+			putData = data
+			putContentType = contentType
+			return nil
+		},
+	}
+
+	resizer := &mockResizer{
+		resizeFunc: func(data []byte, opts types.ImageOptions) ([]byte, string, error) {
+			resized = true
+
+			if string(data) != "original-branding-logo" {
+				t.Errorf("Expected original branding logo data, got %q", string(data))
+			}
+			if opts.Width != 350 {
+				t.Errorf("Expected width 350, got %d", opts.Width)
+			}
+			if opts.Height != 438 {
+				t.Errorf("Expected height 438, got %d", opts.Height)
+			}
+			if opts.Version != 3 {
+				t.Errorf("Expected version 3, got %d", opts.Version)
+			}
+			if opts.Fit != "contain" {
+				t.Errorf("Expected fit contain, got %s", opts.Fit)
+			}
+			if opts.Format != "jpeg" {
+				t.Errorf("Expected format jpeg, got %s", opts.Format)
+			}
+
+			return []byte("resized-branding-logo"), "image/jpeg", nil
+		},
+	}
+
+	srv := NewServer(s3, resizer, nil, nil, "")
+
+	req := httptest.NewRequest("GET", "/"+requestedKey, nil)
+	w := httptest.NewRecorder()
+
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status OK, got %d. Body: %s", w.Code, w.Body.String())
+	}
+
+	if len(existsKeys) != 1 || existsKeys[0] != requestedKey {
+		t.Errorf("Expected Exists to check requested key %s, got %v", requestedKey, existsKeys)
+	}
+
+	if len(getKeys) == 0 || getKeys[0] != expectedOriginalKey {
+		t.Errorf("Expected first original Get key %s, got %v", expectedOriginalKey, getKeys)
+	}
+
+	if !resized {
+		t.Error("Expected resize to be attempted")
+	}
+
+	if putKey != requestedKey {
+		t.Errorf("Expected resized image to be cached at %s, got %s", requestedKey, putKey)
+	}
+	if string(putData) != "resized-branding-logo" {
+		t.Errorf("Expected cached resized data, got %q", string(putData))
+	}
+	if putContentType != "image/jpeg" {
+		t.Errorf("Expected cached content type image/jpeg, got %s", putContentType)
+	}
+
+	if w.Header().Get("Content-Type") != "image/jpeg" {
+		t.Errorf("Expected response content type image/jpeg, got %s", w.Header().Get("Content-Type"))
+	}
+	if w.Header().Get("Cache-Control") != "max-age=31536000" {
+		t.Errorf("Expected Cache-Control max-age=31536000, got %s", w.Header().Get("Cache-Control"))
+	}
+	if w.Body.String() != "resized-branding-logo" {
+		t.Errorf("Expected resized response body, got %q", w.Body.String())
+	}
+}
+
+func TestServeHTTP_BrandingResize_ServesCachedObjectWhenExisting(t *testing.T) {
+	requestedKey := "39/3/images/branding/350/438/byflou-com-logo.jpeg"
+
+	s3 := &mockS3Client{
+		existsFunc: func(ctx context.Context, key string) (bool, error) {
+			if key != requestedKey {
+				t.Errorf("Expected Exists key %s, got %s", requestedKey, key)
+			}
+			return true, nil
+		},
+		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
+			if key != requestedKey {
+				t.Errorf("Expected Get key %s, got %s", requestedKey, key)
+			}
+			return []byte("cached-branding-logo"), "image/jpeg", nil
+		},
+		putFunc: func(ctx context.Context, key string, data []byte, contentType string, tags map[string]string) error {
+			t.Errorf("Put should not be called when cached object exists")
+			return nil
+		},
+	}
+
+	resizer := &mockResizer{
+		resizeFunc: func(data []byte, opts types.ImageOptions) ([]byte, string, error) {
+			t.Errorf("Resize should not be called when cached object exists")
+			return nil, "", nil
+		},
+	}
+
+	srv := NewServer(s3, resizer, nil, nil, "")
+
+	req := httptest.NewRequest("GET", "/"+requestedKey, nil)
+	w := httptest.NewRecorder()
+
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status OK, got %d. Body: %s", w.Code, w.Body.String())
+	}
+
+	if w.Header().Get("Content-Type") != "image/jpeg" {
+		t.Errorf("Expected response content type image/jpeg, got %s", w.Header().Get("Content-Type"))
+	}
+	if w.Header().Get("Cache-Control") != "max-age=31536000" {
+		t.Errorf("Expected Cache-Control max-age=31536000, got %s", w.Header().Get("Cache-Control"))
+	}
+	if w.Body.String() != "cached-branding-logo" {
+		t.Errorf("Expected cached response body, got %q", w.Body.String())
 	}
 }
