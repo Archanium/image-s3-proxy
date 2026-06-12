@@ -107,12 +107,12 @@ Phases 1 and 2 should be separate commits to keep review tractable. Phase 3 prod
    - **libvips lifecycle** — unchanged (no edits to resizer.go or vips Startup/Shutdown lines).
    - **Worker fire-and-forget contract (I10)** — preserved (smoke test 1 confirmed).
    - **Cross-platform** — `make test` (Alpine) and `make test-debian` both pass.
-- [ ] **Task 3.5:** Commit draft/ context, push branch, open PR. **Awaiting user confirmation before pushing (visible-to-others action).**
+- [x] **Task 3.5:** Committed draft/ scaffolding (819e69e), pushed branch, opened PR #1: https://github.com/Archanium/image-s3-proxy/pull/1
 
 **Verification gate:**
 - All three smoke-test `curl`s produced well-formed JSON + Server-Timing as described. ✓
 - Microbenchmark overhead 2.4 µs/req — < 0.025% on the cheapest path; well under the 5% target. ✓
-- PR creation pending user authorization to push.
+- PR opened. ✓
 
 ## Notes
 

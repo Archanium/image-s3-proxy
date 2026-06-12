@@ -17,16 +17,16 @@ synced_to_commit: "21fdfb3c6f1fc77bc3f10c54bd56e804e5ff0d86"
 # Tracks
 
 ## Active
-
-### add-access-logs-and-timings - Structured access logs + Server-Timing header
-- **Status:** [~] In Progress
-- **Created:** 2026-06-12
-- **Phases:** 2/3
-- **Tasks:** 23/24 (push + PR pending user authorization)
-- **Path:** `./tracks/add-access-logs-and-timings/`
+<!-- No active tracks -->
 
 ## Completed
-<!-- No completed tracks -->
+
+### add-access-logs-and-timings - Structured access logs + Server-Timing header
+- **Status:** [x] Completed 2026-06-12
+- **Phases:** 3/3
+- **Tasks:** 24/24
+- **PR:** https://github.com/Archanium/image-s3-proxy/pull/1
+- **Path:** `./tracks/add-access-logs-and-timings/`
 
 ## Archived
 <!-- No archived tracks -->
