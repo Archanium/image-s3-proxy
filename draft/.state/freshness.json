@@ -1,0 +1,28 @@
+{
+  "generated_at": "2026-06-12T12:41:43Z",
+  "git_commit": "21fdfb3c6f1fc77bc3f10c54bd56e804e5ff0d86",
+  "total_files": 21,
+  "files": {
+    ".circleci/config.yml": "sha256:914830969596645e9d860413296c900340cad3a95b62aa0a433b614fbfd9ded6",
+    ".dockerignore": "sha256:afe22bb26df67c4935506c3b1d0c5a460655480e4adc36afcb10a082b38bff4b",
+    ".gitignore": "sha256:5865ac5da26e04e61ef3260d2c3880ea8171d99522fa085403740ae63fabba41",
+    "Dockerfile.alpine": "sha256:62cf98ec23896a114021afc0db253022f4ee00c30b7db2d5f034bc725fe6ec11",
+    "Dockerfile.debian": "sha256:e88bb1526e2595c9fae193d8c080bcdc8559b5a5bb84e692ec90f20641518a48",
+    "Makefile": "sha256:bb246c79047b5a28f0d1b8159960c7f83b4e4a7f5e8eea98c0d1dc9977284d4e",
+    "README.md": "sha256:305f4e9717b2c2401af458798b4f061c8645a6efdc63915e7b587bee5bef2cdb",
+    "cmd/image-proxy/main.go": "sha256:789a4f64f39b4c61321eb3e8b77ea3a2b749c40bb3d7391294786d7dd74d5fc7",
+    "docker-compose.yml": "sha256:533cd98690a554905c331b027abfa63bea7cb30cd262713c7bd7152e4b57ef42",
+    "go.mod": "sha256:8940a462032026612317606e75f18836e83f7f730dc79f17155c7f756416220d",
+    "go.sum": "sha256:2d02ea153c7c36f6d60b6c74420acb77dad747ce3f76db53bb77b79cdabcf514",
+    "internal/resizer/resizer.go": "sha256:5108cfc1dbd748579a9fd0ca546f57f1f74c65c32a23cf5aa7497a666f796ff8",
+    "internal/resizer/resizer_test.go": "sha256:917dc19e88e3c9bf323180d104aa94af19649d6c4c3c657d602d9cca6f18a3f4",
+    "internal/s3/s3.go": "sha256:d70be270a0c40bb28c81bc4562e8cdee6b182bb64b760388dbc626a38a4ea281",
+    "internal/s3/s3_test.go": "sha256:3fe6be378389f34b2172996b0b257a4a43566a965bae8629fa68ec947d354e16",
+    "internal/server/server.go": "sha256:a510c4ad3b0635d3f415489e519cf9b6e8a9f08b48242db3a74ec218b1e9c138",
+    "internal/server/server_test.go": "sha256:6f93f332a94487cc2736258e9eefe7f300bf236fd4010ac2be53d022ceb8ca85",
+    "internal/types/types.go": "sha256:dafedcc41c10578e417960baac65279147cdb1a1d9d8c4b867d152f3484ec75e",
+    "internal/worker/worker.go": "sha256:eda97518b35f9937dd3b1d2fd502aa3e62d2de580590b59ef1a281036f880798",
+    "internal/worker/worker_test.go": "sha256:08a251376b051f665568c95361f2603b18671a64f648005e84a69a69a523b69c",
+    "junie.md": "sha256:9eb12bc69a4138f29b10a75e7da5ad550baa3f834963d65029627396aa7d3cd8"
+  }
+}

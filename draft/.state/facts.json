@@ -1,0 +1,258 @@
+{
+  "generated_at": "2026-06-12T12:41:43Z",
+  "git_commit": "21fdfb3c6f1fc77bc3f10c54bd56e804e5ff0d86",
+  "total_facts": 25,
+  "categories": ["data-flow", "architecture", "invariant", "dependency", "api", "security", "concurrency", "configuration", "testing", "convention"],
+  "facts": [
+    {
+      "id": "fact-001",
+      "category": "architecture",
+      "statement": "Service is a single-binary Go HTTP server with 5 packages: cmd/image-proxy (main), internal/types (interfaces), internal/s3, internal/resizer, internal/server, internal/worker.",
+      "confidence": 1.0,
+      "source_files": ["cmd/image-proxy/main.go", "internal/types/types.go", "internal/s3/s3.go", "internal/resizer/resizer.go", "internal/server/server.go", "internal/worker/worker.go"],
+      "discovered_at": "2026-06-12T12:41:43Z",
+      "last_verified_at": "2026-06-12T12:41:43Z",
+      "edges": {}
+    },
+    {
+      "id": "fact-002",
+      "category": "architecture",
+      "statement": "Dependency injection is constructor-based via internal/types interfaces (Resizer, S3Client); no DI container exists.",
+      "confidence": 1.0,
+      "source_files": ["internal/types/types.go", "internal/server/server.go", "cmd/image-proxy/main.go"],
+      "discovered_at": "2026-06-12T12:41:43Z",
+      "last_verified_at": "2026-06-12T12:41:43Z",
+      "edges": {}
+    },
+    {
+      "id": "fact-003",
+      "category": "data-flow",
+      "statement": "Hot-path: HEAD primary, GET on hit, regex match + handleResize on miss, original Get via list of candidate keys, resizer.Resize, Put back to S3 under normalized key, then serve.",
+      "confidence": 1.0,
+      "source_files": ["internal/server/server.go"],
+      "discovered_at": "2026-06-12T12:41:43Z",
+      "last_verified_at": "2026-06-12T12:41:43Z",
+      "edges": {"derives": ["fact-007", "fact-008"]}
+    },
+    {
+      "id": "fact-004",
+      "category": "data-flow",
+      "statement": "Fallback bucket is consulted only on primary miss in s3.Client.Get and s3.Client.Exists; if fallback hit, Get writes the object to primary with defaultTags before returning (lazy migration).",
+      "confidence": 1.0,
+      "source_files": ["internal/s3/s3.go"],
+      "discovered_at": "2026-06-12T12:41:43Z",
+      "last_verified_at": "2026-06-12T12:41:43Z",
+      "edges": {"derives": ["fact-009"]}
+    },
+    {
+      "id": "fact-005",
+      "category": "data-flow",
+      "statement": "Fallback retry strategy: try original key, then key with the leading <clientId>/ prefix stripped. No deeper alternates.",
+      "confidence": 1.0,
+      "source_files": ["internal/s3/s3.go"],
+      "discovered_at": "2026-06-12T12:41:43Z",
+      "last_verified_at": "2026-06-12T12:41:43Z",
+      "edges": {}
+    },
+    {
+      "id": "fact-006",
+      "category": "api",
+      "statement": "Three URL families handled by server: resizeRegex (resize with width/height), fileRegex (passthrough file), folderImageRegex (format-change / passthrough images).",
+      "confidence": 1.0,
+      "source_files": ["internal/server/server.go"],
+      "discovered_at": "2026-06-12T12:41:43Z",
+      "last_verified_at": "2026-06-12T12:41:43Z",
+      "edges": {}
+    },
+    {
+      "id": "fact-007",
+      "category": "invariant",
+      "statement": "Resized output is always cached back to S3 under the normalized key before being served.",
+      "confidence": 1.0,
+      "source_files": ["internal/server/server.go"],
+      "discovered_at": "2026-06-12T12:41:43Z",
+      "last_verified_at": "2026-06-12T12:41:43Z",
+      "edges": {}
+    },
+    {
+      "id": "fact-008",
+      "category": "invariant",
+      "statement": "Cache-Control header is max-age=31536000 on 2xx image responses and max-age=30 on errors via httpError helper.",
+      "confidence": 1.0,
+      "source_files": ["internal/server/server.go"],
+      "discovered_at": "2026-06-12T12:41:43Z",
+      "last_verified_at": "2026-06-12T12:41:43Z",
+      "edges": {}
+    },
+    {
+      "id": "fact-009",
+      "category": "invariant",
+      "statement": "Requests whose filename portion has no '.' are rejected with 404 before any S3 lookup.",
+      "confidence": 1.0,
+      "source_files": ["internal/server/server.go"],
+      "discovered_at": "2026-06-12T12:41:43Z",
+      "last_verified_at": "2026-06-12T12:41:43Z",
+      "edges": {}
+    },
+    {
+      "id": "fact-010",
+      "category": "invariant",
+      "statement": "BUCKET env var is required; main.go calls log.Fatal if absent.",
+      "confidence": 1.0,
+      "source_files": ["cmd/image-proxy/main.go"],
+      "discovered_at": "2026-06-12T12:41:43Z",
+      "last_verified_at": "2026-06-12T12:41:43Z",
+      "edges": {}
+    },
+    {
+      "id": "fact-011",
+      "category": "invariant",
+      "statement": "vips.Startup is called once at process start; vips.Shutdown is deferred from main. Every vips.ImageRef is Close()'d via defer in Resize.",
+      "confidence": 1.0,
+      "source_files": ["cmd/image-proxy/main.go", "internal/resizer/resizer.go"],
+      "discovered_at": "2026-06-12T12:41:43Z",
+      "last_verified_at": "2026-06-12T12:41:43Z",
+      "edges": {}
+    },
+    {
+      "id": "fact-012",
+      "category": "concurrency",
+      "statement": "POST /_/worker/trigger dispatches a detached goroutine using context.Background and returns 202 immediately; the HTTP response does not reflect the resize outcome.",
+      "confidence": 1.0,
+      "source_files": ["internal/server/server.go"],
+      "discovered_at": "2026-06-12T12:41:43Z",
+      "last_verified_at": "2026-06-12T12:41:43Z",
+      "edges": {}
+    },
+    {
+      "id": "fact-013",
+      "category": "concurrency",
+      "statement": "There are no sync.Mutex / sync.RWMutex usages in production code; no shared mutable state across requests post-startup.",
+      "confidence": 0.95,
+      "source_files": ["internal/s3/s3.go", "internal/resizer/resizer.go", "internal/server/server.go", "internal/worker/worker.go"],
+      "discovered_at": "2026-06-12T12:41:43Z",
+      "last_verified_at": "2026-06-12T12:41:43Z",
+      "edges": {}
+    },
+    {
+      "id": "fact-014",
+      "category": "dependency",
+      "statement": "Production deps: aws-sdk-go-v2 (s3, config, credentials, eventstream), govips/v2 (libvips); CGO required.",
+      "confidence": 1.0,
+      "source_files": ["go.mod"],
+      "discovered_at": "2026-06-12T12:41:43Z",
+      "last_verified_at": "2026-06-12T12:41:43Z",
+      "edges": {}
+    },
+    {
+      "id": "fact-015",
+      "category": "configuration",
+      "statement": "All runtime configuration is via process env vars, evaluated once in main.go; there is no config file and no hot reload.",
+      "confidence": 1.0,
+      "source_files": ["cmd/image-proxy/main.go"],
+      "discovered_at": "2026-06-12T12:41:43Z",
+      "last_verified_at": "2026-06-12T12:41:43Z",
+      "edges": {}
+    },
+    {
+      "id": "fact-016",
+      "category": "configuration",
+      "statement": "Optional fallback S3 client is enabled by setting OLD_S3_BUCKET; OLD_S3_REGION defaults to AWS_REGION when unset.",
+      "confidence": 1.0,
+      "source_files": ["cmd/image-proxy/main.go"],
+      "discovered_at": "2026-06-12T12:41:43Z",
+      "last_verified_at": "2026-06-12T12:41:43Z",
+      "edges": {}
+    },
+    {
+      "id": "fact-017",
+      "category": "testing",
+      "statement": "Test mocks use struct-of-function-pointer pattern (e.g. mockS3Client.existsFunc); no mocking library is used.",
+      "confidence": 1.0,
+      "source_files": ["internal/server/server_test.go", "internal/s3/s3_test.go", "internal/worker/worker_test.go"],
+      "discovered_at": "2026-06-12T12:41:43Z",
+      "last_verified_at": "2026-06-12T12:41:43Z",
+      "edges": {}
+    },
+    {
+      "id": "fact-018",
+      "category": "testing",
+      "statement": "Each package has a TestMain that silences log output unless DEBUG=true is set in the environment.",
+      "confidence": 1.0,
+      "source_files": ["internal/server/server_test.go", "internal/s3/s3_test.go"],
+      "discovered_at": "2026-06-12T12:41:43Z",
+      "last_verified_at": "2026-06-12T12:41:43Z",
+      "edges": {}
+    },
+    {
+      "id": "fact-019",
+      "category": "convention",
+      "statement": "os.Getenv is called only in cmd/image-proxy/main.go; internal packages receive configuration as constructor arguments.",
+      "confidence": 1.0,
+      "source_files": ["cmd/image-proxy/main.go"],
+      "discovered_at": "2026-06-12T12:41:43Z",
+      "last_verified_at": "2026-06-12T12:41:43Z",
+      "edges": {}
+    },
+    {
+      "id": "fact-020",
+      "category": "convention",
+      "statement": "S3 NotFound detection uses string-matching on err.Error() for 'NotFound' or 'NoSuchKey'. This is fragile against SDK error changes.",
+      "confidence": 1.0,
+      "source_files": ["internal/s3/s3.go"],
+      "discovered_at": "2026-06-12T12:41:43Z",
+      "last_verified_at": "2026-06-12T12:41:43Z",
+      "edges": {}
+    },
+    {
+      "id": "fact-021",
+      "category": "security",
+      "statement": "POST /_/worker/trigger has no authentication; relies on load balancer / network controls to limit access.",
+      "confidence": 1.0,
+      "source_files": ["internal/server/server.go"],
+      "discovered_at": "2026-06-12T12:41:43Z",
+      "last_verified_at": "2026-06-12T12:41:43Z",
+      "edges": {}
+    },
+    {
+      "id": "fact-022",
+      "category": "security",
+      "statement": "s3.NewClient logs the AccessKey ID when using static credentials but never logs the secret.",
+      "confidence": 1.0,
+      "source_files": ["internal/s3/s3.go"],
+      "discovered_at": "2026-06-12T12:41:43Z",
+      "last_verified_at": "2026-06-12T12:41:43Z",
+      "edges": {}
+    },
+    {
+      "id": "fact-023",
+      "category": "architecture",
+      "statement": "types.Storage interface is declared but is not implemented or referenced anywhere — dead code at this snapshot.",
+      "confidence": 1.0,
+      "source_files": ["internal/types/types.go"],
+      "discovered_at": "2026-06-12T12:41:43Z",
+      "last_verified_at": "2026-06-12T12:41:43Z",
+      "edges": {}
+    },
+    {
+      "id": "fact-024",
+      "category": "architecture",
+      "statement": "worker.go hard-codes clientId=13 in the thumbnail key template ('13/%d/images/%s/%d/%d/%s.%s'); the worker is currently correct only for that client.",
+      "confidence": 1.0,
+      "source_files": ["internal/worker/worker.go"],
+      "discovered_at": "2026-06-12T12:41:43Z",
+      "last_verified_at": "2026-06-12T12:41:43Z",
+      "edges": {}
+    },
+    {
+      "id": "fact-025",
+      "category": "architecture",
+      "statement": "worker.destS3Client field is plumbed through NewWorker but always passed nil by server.NewServer; effectively dead in the production wiring path.",
+      "confidence": 1.0,
+      "source_files": ["internal/server/server.go", "internal/worker/worker.go"],
+      "discovered_at": "2026-06-12T12:41:43Z",
+      "last_verified_at": "2026-06-12T12:41:43Z",
+      "edges": {}
+    }
+  ]
+}

@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image-proxy/internal/accesslog"
 	"image-proxy/internal/types"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -701,5 +703,141 @@ func TestServeHTTP_BrandingResize_ServesCachedObjectWhenExisting(t *testing.T) {
 	}
 	if w.Body.String() != "cached-branding-logo" {
 		t.Errorf("Expected cached response body, got %q", w.Body.String())
+	}
+}
+
+// --- Server-Timing integration tests (track add-access-logs-and-timings) ---
+
+func newMiddlewareWrapped(srv *Server) http.Handler {
+	// Discard the JSON log line — these tests assert on the Server-Timing
+	// response header, not on the access-log stream.
+	return accesslog.Middleware(srv, accesslog.NewLogger(io.Discard), "test-bucket")
+}
+
+func parseServerTimingPhases(t *testing.T, header string) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	if header == "" {
+		return out
+	}
+	for _, part := range strings.Split(header, ", ") {
+		name, _, _ := strings.Cut(strings.TrimSpace(part), ";")
+		if name != "" {
+			out[name] = true
+		}
+	}
+	return out
+}
+
+func TestServeHTTP_ServerTiming_CachedHit(t *testing.T) {
+	s3 := &mockS3Client{
+		existsFunc: func(ctx context.Context, key string) (bool, error) { return true, nil },
+		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
+			return []byte("cached"), "image/jpeg", nil
+		},
+	}
+	resizer := &mockResizer{}
+	handler := newMiddlewareWrapped(NewServer(s3, resizer, nil, nil, ""))
+
+	req := httptest.NewRequest("GET", "/cached-image.jpg", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	got := parseServerTimingPhases(t, w.Header().Get("Server-Timing"))
+	want := []string{"s3-exists", "s3-get"}
+	for _, phase := range want {
+		if !got[phase] {
+			t.Errorf("Server-Timing missing %q; got %v", phase, w.Header().Get("Server-Timing"))
+		}
+	}
+	for _, unwanted := range []string{"resize", "s3-put"} {
+		if got[unwanted] {
+			t.Errorf("Server-Timing unexpectedly contained %q on cached-hit path: %v", unwanted, w.Header().Get("Server-Timing"))
+		}
+	}
+}
+
+func TestServeHTTP_ServerTiming_ResizeAllFourPhases(t *testing.T) {
+	s3 := &mockS3Client{
+		existsFunc: func(ctx context.Context, key string) (bool, error) { return false, nil },
+		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
+			if key == "123/catalog/products/images/test-image.jpg" {
+				return []byte("original"), "image/jpeg", nil
+			}
+			return nil, "", fmt.Errorf("not found: %s", key)
+		},
+		putFunc: func(ctx context.Context, key string, data []byte, contentType string, tags map[string]string) error {
+			return nil
+		},
+	}
+	resizer := &mockResizer{
+		resizeFunc: func(data []byte, opts types.ImageOptions) ([]byte, string, error) {
+			return []byte("resized"), "image/webp", nil
+		},
+	}
+	handler := newMiddlewareWrapped(NewServer(s3, resizer, nil, nil, ""))
+
+	req := httptest.NewRequest("GET", "/123/2/images/products/100/100/test-image.jpg.webp", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200. Body=%s", w.Code, w.Body.String())
+	}
+	got := parseServerTimingPhases(t, w.Header().Get("Server-Timing"))
+	for _, phase := range []string{"s3-exists", "s3-get", "resize", "s3-put"} {
+		if !got[phase] {
+			t.Errorf("Server-Timing missing %q on resize path; got %v", phase, w.Header().Get("Server-Timing"))
+		}
+	}
+}
+
+func TestServeHTTP_ServerTiming_ErrorPathStillHasS3Phases(t *testing.T) {
+	// Original cannot be found across any candidate key. Server returns 404
+	// via httpError, but Server-Timing should still report the s3-exists +
+	// s3-get phases the request actually performed.
+	s3 := &mockS3Client{
+		existsFunc: func(ctx context.Context, key string) (bool, error) { return false, nil },
+		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
+			return nil, "", fmt.Errorf("NotFound: %s", key)
+		},
+	}
+	resizer := &mockResizer{}
+	handler := newMiddlewareWrapped(NewServer(s3, resizer, nil, nil, ""))
+
+	req := httptest.NewRequest("GET", "/123/2/images/products/100/100/missing.jpg.webp", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+	got := parseServerTimingPhases(t, w.Header().Get("Server-Timing"))
+	for _, phase := range []string{"s3-exists", "s3-get"} {
+		if !got[phase] {
+			t.Errorf("Server-Timing missing %q on 404 path; got %v", phase, w.Header().Get("Server-Timing"))
+		}
+	}
+}
+
+func TestServeHTTP_XRequestIDEcho(t *testing.T) {
+	s3 := &mockS3Client{
+		existsFunc: func(ctx context.Context, key string) (bool, error) { return true, nil },
+		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
+			return []byte("ok"), "image/jpeg", nil
+		},
+	}
+	handler := newMiddlewareWrapped(NewServer(s3, &mockResizer{}, nil, nil, ""))
+
+	req := httptest.NewRequest("GET", "/cached-image.jpg", nil)
+	req.Header.Set("X-Request-ID", "trace-abc-123")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if got := w.Header().Get("X-Request-ID"); got != "trace-abc-123" {
+		t.Errorf("response X-Request-ID = %q, want trace-abc-123", got)
 	}
 }
