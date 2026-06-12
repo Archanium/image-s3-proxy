@@ -1,0 +1,16 @@
+{
+  "id": "add-access-logs-and-timings",
+  "title": "Structured access logs + Server-Timing header",
+  "type": "feature",
+  "status": "in_progress",
+  "created": "2026-06-12T12:55:00Z",
+  "updated": "2026-06-12T14:35:00Z",
+  "phases": {
+    "total": 3,
+    "completed": 2
+  },
+  "tasks": {
+    "total": 24,
+    "completed": 23
+  }
+}

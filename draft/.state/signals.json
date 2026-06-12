@@ -1,0 +1,65 @@
+{
+  "generated_at": "2026-06-12T12:41:43Z",
+  "git_commit": "21fdfb3c6f1fc77bc3f10c54bd56e804e5ff0d86",
+  "total_files_scanned": 11,
+  "signals": {
+    "backend_routes": {
+      "count": 1,
+      "sample_files": ["internal/server/server.go"],
+      "note": "single ServeHTTP entry point with 3 regex routes + 1 POST endpoint; no /routes/ or /handlers/ directory"
+    },
+    "frontend_routes": { "count": 0, "sample_files": [] },
+    "components": { "count": 0, "sample_files": [] },
+    "services": {
+      "count": 4,
+      "sample_files": [
+        "internal/s3/s3.go",
+        "internal/resizer/resizer.go",
+        "internal/server/server.go",
+        "internal/worker/worker.go"
+      ],
+      "note": "internal packages act as service-layer modules; no /services/ directory naming convention"
+    },
+    "data_models": {
+      "count": 1,
+      "sample_files": ["internal/types/types.go"],
+      "note": "ImageOptions + interface contracts only; no persistence models — primary store is opaque S3 objects"
+    },
+    "auth_files": {
+      "count": 0,
+      "sample_files": [],
+      "note": "no auth at proxy layer; relies on load balancer / CDN"
+    },
+    "state_management": { "count": 0, "sample_files": [] },
+    "background_jobs": {
+      "count": 1,
+      "sample_files": ["internal/worker/worker.go"],
+      "note": "bulk pre-resize triggered via POST /_/worker/trigger; no queue, no scheduler"
+    },
+    "persistence": {
+      "count": 1,
+      "sample_files": ["internal/s3/s3.go"],
+      "note": "S3 only — no relational DB, no ORM"
+    },
+    "test_infra": {
+      "count": 5,
+      "sample_files": [
+        "internal/s3/s3_test.go",
+        "internal/server/server_test.go",
+        "internal/resizer/resizer_test.go",
+        "internal/worker/worker_test.go",
+        "tests/fixtures/"
+      ]
+    },
+    "config_files": {
+      "count": 4,
+      "sample_files": [
+        "docker-compose.yml",
+        "Dockerfile.alpine",
+        "Dockerfile.debian",
+        ".circleci/config.yml"
+      ],
+      "note": "no application config file; runtime config is env-var only"
+    }
+  }
+}
