@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"image-proxy/internal/accesslog"
 	"image-proxy/internal/types"
 	"image-proxy/internal/worker"
 	"log"
@@ -61,7 +62,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 1. Check if the key exists in S3
-	exists, err := s.s3Client.Exists(ctx, key)
+	var exists bool
+	err := s.time(ctx, "s3-exists", func() error {
+		var e error
+		exists, e = s.s3Client.Exists(ctx, key)
+		return e
+	})
 	if err != nil {
 		log.Printf("Error checking S3 existence for %s: %v", key, err)
 	}
@@ -69,7 +75,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if exists {
 		log.Printf("Key %s found in S3, serving directly", key)
 		// Serve from S3
-		data, contentType, err := s.s3Client.Get(ctx, key)
+		var data []byte
+		var contentType string
+		err := s.time(ctx, "s3-get", func() error {
+			var e error
+			data, contentType, e = s.s3Client.Get(ctx, key)
+			return e
+		})
 		if err == nil {
 			w.Header().Set("Content-Type", contentType)
 			w.Header().Set("Cache-Control", "max-age=31536000")
@@ -102,11 +114,21 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if normalizedKey != key {
 			log.Printf("Normalized key: %s", normalizedKey)
 			// Check if the normalized key exists in S3
-			exists, err := s.s3Client.Exists(ctx, normalizedKey)
-			if err == nil && exists {
+			var nExists bool
+			nErr := s.time(ctx, "s3-exists", func() error {
+				var e error
+				nExists, e = s.s3Client.Exists(ctx, normalizedKey)
+				return e
+			})
+			if nErr == nil && nExists {
 				log.Printf("Normalized key %s found in S3, serving", normalizedKey)
-				data, contentType, err := s.s3Client.Get(ctx, normalizedKey)
-				if err == nil {
+				var data []byte
+				var contentType string
+				if e := s.time(ctx, "s3-get", func() error {
+					var ge error
+					data, contentType, ge = s.s3Client.Get(ctx, normalizedKey)
+					return ge
+				}); e == nil {
 					w.Header().Set("Content-Type", contentType)
 					w.Header().Set("Cache-Control", "max-age=31536000")
 					w.Write(data)
@@ -212,7 +234,12 @@ func (s *Server) handleResize(w http.ResponseWriter, ctx context.Context, key st
 	}
 
 	for _, k := range keysToTry {
-		data, _, err = s.s3Client.Get(ctx, k)
+		k := k
+		err = s.time(ctx, "s3-get", func() error {
+			var e error
+			data, _, e = s.s3Client.Get(ctx, k)
+			return e
+		})
 		if err == nil {
 			break
 		}
@@ -225,15 +252,26 @@ func (s *Server) handleResize(w http.ResponseWriter, ctx context.Context, key st
 	}
 
 	// Resize
-	resizedData, contentType, err := s.resizer.Resize(data, opts)
+	var resizedData []byte
+	var contentType string
+	err = s.time(ctx, "resize", func() error {
+		var e error
+		resizedData, contentType, e = s.resizer.Resize(data, opts)
+		return e
+	})
 	if err != nil {
 		log.Printf("Resize error: %v", err)
 		s.httpError(w, "Resize error", http.StatusInternalServerError)
 		return
 	}
 
-	// Save back to S3
-	err = s.s3Client.Put(ctx, key, resizedData, contentType, s.tags)
+	// Save back to S3 before responding so the Server-Timing header
+	// reflects the s3-put cost. The existing semantics are preserved: a
+	// Put failure is logged and the resized bytes are still returned to
+	// the client.
+	err = s.time(ctx, "s3-put", func() error {
+		return s.s3Client.Put(ctx, key, resizedData, contentType, s.tags)
+	})
 	if err != nil {
 		log.Printf("S3 Save error: %v", err)
 	}
@@ -255,7 +293,13 @@ func (s *Server) handleFile(w http.ResponseWriter, ctx context.Context, key stri
 	clientId := groups["clientId"]
 	originalKey := clientId + "/files/" + fileId + "/" + path
 
-	data, contentType, err := s.s3Client.Get(ctx, originalKey)
+	var data []byte
+	var contentType string
+	err := s.time(ctx, "s3-get", func() error {
+		var e error
+		data, contentType, e = s.s3Client.Get(ctx, originalKey)
+		return e
+	})
 	if err != nil {
 		s.httpError(w, "File not found", http.StatusNotFound)
 		return
@@ -265,8 +309,11 @@ func (s *Server) handleFile(w http.ResponseWriter, ctx context.Context, key stri
 		contentType = "application/octet-stream"
 	}
 
-	// Save back to S3 (caching)
-	err = s.s3Client.Put(ctx, key, data, contentType, s.tags)
+	// Save back to S3 (caching) before responding so Server-Timing
+	// includes s3-put. Failure is logged but does not fail the request.
+	err = s.time(ctx, "s3-put", func() error {
+		return s.s3Client.Put(ctx, key, data, contentType, s.tags)
+	})
 	if err != nil {
 		log.Printf("S3 Save error: %v", err)
 	}
@@ -355,4 +402,13 @@ func getNamedGroups(re *regexp.Regexp, s string) map[string]string {
 		}
 	}
 	return result
+}
+
+// time wraps an S3 or resize call site, recording the elapsed time under
+// phase in the *Timings carried by ctx. When the access-log middleware is
+// not installed (e.g. in unit tests that construct Server directly), the
+// underlying Timings is a discard no-op so the call site behaves
+// identically except for the closure indirection.
+func (s *Server) time(ctx context.Context, phase string, fn func() error) error {
+	return accesslog.TimingsFromContext(ctx).Track(phase, fn)
 }

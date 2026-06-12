@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"image-proxy/internal/accesslog"
 	"image-proxy/internal/resizer"
 	"image-proxy/internal/s3"
 	"image-proxy/internal/server"
@@ -100,8 +101,18 @@ func main() {
 
 	srv := server.NewServer(s3Client, imgResizer, tags, sizes, format)
 
+	// upstreamHost is logged on every access line. Prefer the custom
+	// endpoint (Hetzner / MinIO) when configured, otherwise fall back to
+	// the bucket name. Informational only — not used for routing.
+	upstreamHost := endpoint
+	if upstreamHost == "" {
+		upstreamHost = bucket
+	}
+	accessLogger := accesslog.NewLogger(os.Stdout)
+	handler := accesslog.Middleware(srv, accessLogger, upstreamHost)
+
 	log.Printf("Starting image proxy on port %s", port)
-	if err := http.ListenAndServe(":"+port, srv); err != nil {
+	if err := http.ListenAndServe(":"+port, handler); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
 }
