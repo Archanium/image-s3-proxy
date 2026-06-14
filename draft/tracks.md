@@ -21,6 +21,13 @@ synced_to_commit: "21fdfb3c6f1fc77bc3f10c54bd56e804e5ff0d86"
 
 ## Completed
 
+### split-origin-and-cache-buckets - Split origin/cache buckets + canary mode (off/shadow/live)
+- **Status:** [x] Completed 2026-06-14
+- **Phases:** 3/3
+- **Tasks:** 27/27
+- **PR:** https://github.com/Archanium/image-s3-proxy/pull/2
+- **Path:** `./tracks/split-origin-and-cache-buckets/`
+
 ### add-access-logs-and-timings - Structured access logs + Server-Timing header
 - **Status:** [x] Completed 2026-06-12
 - **Phases:** 3/3

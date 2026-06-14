@@ -11,12 +11,12 @@ import (
 // fixed by the struct field declaration order; nested key order is
 // similarly fixed by the embedded struct declarations below.
 type Entry struct {
-	Timestamp string         `json:"@timestamp"`
-	Extra     EntryExtra     `json:"extra"`
-	User      EntryUser      `json:"user"`
-	Request   EntryRequest   `json:"request"`
-	Response  EntryResponse  `json:"response"`
-	Upstream  EntryUpstream  `json:"upstream"`
+	Timestamp string        `json:"@timestamp"`
+	Extra     EntryExtra    `json:"extra"`
+	User      EntryUser     `json:"user"`
+	Request   EntryRequest  `json:"request"`
+	Response  EntryResponse `json:"response"`
+	Upstream  EntryUpstream `json:"upstream"`
 }
 
 // EntryExtra carries the per-request correlation identifier.
