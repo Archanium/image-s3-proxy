@@ -1,0 +1,16 @@
+{
+  "id": "split-origin-and-cache-buckets",
+  "title": "Split origin/cache buckets + canary mode (off/shadow/live) + single-GET cache-hit path",
+  "type": "feature",
+  "status": "planning",
+  "created": "2026-06-13T17:05:00Z",
+  "updated": "2026-06-13T19:15:00Z",
+  "phases": {
+    "total": 3,
+    "completed": 0
+  },
+  "tasks": {
+    "total": 27,
+    "completed": 0
+  }
+}

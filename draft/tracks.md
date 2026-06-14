@@ -17,7 +17,13 @@ synced_to_commit: "21fdfb3c6f1fc77bc3f10c54bd56e804e5ff0d86"
 # Tracks
 
 ## Active
-<!-- No active tracks -->
+
+### split-origin-and-cache-buckets - Split origin/cache buckets + canary mode (off/shadow/live)
+- **Status:** [~] In Progress
+- **Created:** 2026-06-13
+- **Phases:** 0/3
+- **Tasks:** 0/27
+- **Path:** `./tracks/split-origin-and-cache-buckets/`
 
 ## Completed
 
