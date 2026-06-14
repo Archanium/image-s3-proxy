@@ -75,25 +75,35 @@ func (w *Worker) ProcessProductImage(ctx context.Context, origKey string) error 
 
 		thumbKey := fmt.Sprintf("13/%d/images/%s/%d/%d/%s.%s", version, folder, width, height, origFilename, w.format)
 
+		// Exists-check targets the cache client when split; that's the
+		// bucket we're populating, and skipping when it already has the
+		// variant is the correct pre-warm behavior. In single-client
+		// mode destS3Client == s3Client and this is unchanged from
+		// historical behavior.
+		checkClient := w.s3Client
+		if w.destS3Client != nil {
+			checkClient = w.destS3Client
+		}
 		if !w.forceOverwrite {
-			exists, err := w.s3Client.Exists(ctx, thumbKey)
+			exists, err := checkClient.Exists(ctx, thumbKey)
 			if err == nil && exists {
 				log.Printf("Thumbnail %s already exists, skipping", thumbKey)
 				continue
 			}
 		}
 
-		client := w.s3Client
-		if w.destS3Client != nil {
-			client = w.destS3Client
+		// Dual-write when origin and dest are distinct (split mode);
+		// otherwise a single write. Failures are logged but do not
+		// abort the per-size loop — the next size still gets a shot.
+		if err = w.s3Client.Put(ctx, thumbKey, resizedData, contentType); err != nil {
+			log.Printf("Failed to save thumbnail %s to origin: %v", thumbKey, err)
 		}
-
-		err = client.Put(ctx, thumbKey, resizedData, contentType)
-		if err != nil {
-			log.Printf("Failed to save thumbnail %s: %v", thumbKey, err)
-		} else {
-			log.Printf("Successfully saved thumbnail %s", thumbKey)
+		if w.destS3Client != nil && w.destS3Client != w.s3Client {
+			if err := w.destS3Client.Put(ctx, thumbKey, resizedData, contentType); err != nil {
+				log.Printf("Failed to save thumbnail %s to cache: %v", thumbKey, err)
+			}
 		}
+		log.Printf("Saved thumbnail %s", thumbKey)
 	}
 
 	return nil

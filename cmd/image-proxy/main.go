@@ -11,14 +11,10 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
 )
 
 func main() {
 	debug := os.Getenv("DEBUG") == "true"
-	//if !debug {
-	//	log.SetOutput(io.Discard)
-	//}
 
 	bucket := os.Getenv("BUCKET")
 	if bucket == "" {
@@ -42,16 +38,11 @@ func main() {
 		port = "8080"
 	}
 
-	tagStr := os.Getenv("IMAGE_TAGS")
-	tags := make(map[string]string)
-	if tagStr != "" {
-		pairs := strings.Split(tagStr, ",")
-		for _, pair := range pairs {
-			kv := strings.SplitN(pair, "=", 2)
-			if len(kv) == 2 {
-				tags[kv[0]] = kv[1]
-			}
-		}
+	// IMAGE_TAGS is deprecated — neither Hetzner Object Storage nor
+	// Cloudflare R2 implement the S3 Tagging APIs. Keep the env-var read
+	// for backwards compat but log a warning and discard the value.
+	if tagStr := os.Getenv("IMAGE_TAGS"); tagStr != "" {
+		log.Printf("IMAGE_TAGS is deprecated and ignored — HOS and R2 do not implement S3 Tagging APIs")
 	}
 
 	sizeStr := os.Getenv("SIZES")
@@ -68,14 +59,33 @@ func main() {
 	maxCacheMem, _ := strconv.Atoi(os.Getenv("VIPS_MAX_CACHE_MEM"))
 	maxCacheSize, _ := strconv.Atoi(os.Getenv("VIPS_MAX_CACHE_SIZE"))
 
+	// CACHE_MODE selects the storage topology: off (single bucket, today's
+	// behavior), shadow (cache populated via dual-write while reads still
+	// come from origin), or live (cache is primary; origin is dual-written
+	// as belt-and-suspenders).
+	modeStr := os.Getenv("CACHE_MODE")
+	mode, err := server.ParseCacheMode(modeStr)
+	if err != nil {
+		log.Fatalf("invalid CACHE_MODE: %v", err)
+	}
+
+	cacheBucket := os.Getenv("CACHE_BUCKET")
+	if mode != server.CacheModeOff && cacheBucket == "" {
+		log.Fatalf("CACHE_MODE=%s requires CACHE_BUCKET to be set", mode)
+	}
+	if mode == server.CacheModeOff && cacheBucket != "" {
+		log.Printf("CACHE_BUCKET is set but CACHE_MODE is off — cache client will not be constructed")
+	}
+
 	ctx := context.Background()
-	s3Client, err := s3.NewClient(ctx, bucket, region, accessKey, secretKey, endpoint)
+	originClient, err := s3.NewClient(ctx, bucket, region, accessKey, secretKey, endpoint)
 	if err != nil {
 		log.Fatalf("Failed to initialize S3 client: %v", err)
 	}
-	s3Client.SetDefaultTags(tags)
 
-	// Optional fallback client for migration
+	// Optional fallback client for legacy-bucket migration on the origin
+	// side. The cache client never carries a fallback (a cache miss is
+	// just a fall-through to the resize pipeline).
 	oldBucket := os.Getenv("OLD_S3_BUCKET")
 	if oldBucket != "" {
 		oldRegion := os.Getenv("OLD_S3_REGION")
@@ -91,27 +101,56 @@ func main() {
 		if err != nil {
 			log.Printf("Warning: Failed to initialize fallback S3 client: %v", err)
 		} else {
-			s3Client.SetFallback(fallbackClient)
+			originClient.SetFallback(fallbackClient)
 		}
+	}
+
+	// Build the cache client when split mode is requested. When unset,
+	// cacheClient == originClient and the server runs in single-client
+	// (no-op) behavior even if the mode label is "off".
+	cacheClient := originClient
+	if mode != server.CacheModeOff {
+		cacheRegion := os.Getenv("CACHE_AWS_REGION")
+		if cacheRegion == "" {
+			cacheRegion = region
+		}
+		cacheAccessKey := os.Getenv("CACHE_AWS_ACCESS_KEY_ID")
+		cacheSecretKey := os.Getenv("CACHE_AWS_SECRET_ACCESS_KEY")
+		cacheEndpoint := os.Getenv("CACHE_S3_ENDPOINT")
+
+		log.Printf("Initializing cache S3 client for bucket: %s (mode=%s)", cacheBucket, mode)
+		built, err := s3.NewClient(ctx, cacheBucket, cacheRegion, cacheAccessKey, cacheSecretKey, cacheEndpoint)
+		if err != nil {
+			log.Fatalf("Failed to initialize cache S3 client: %v", err)
+		}
+		cacheClient = built
 	}
 
 	imgResizer := resizer.NewResizer()
 	imgResizer.Startup(debug, concurrency, maxCacheMem, maxCacheSize)
 	defer imgResizer.Shutdown()
 
-	srv := server.NewServer(s3Client, imgResizer, tags, sizes, format)
+	srv := server.NewServerWithMode(originClient, cacheClient, mode, imgResizer, sizes, format)
 
-	// upstreamHost is logged on every access line. Prefer the custom
-	// endpoint (Hetzner / MinIO) when configured, otherwise fall back to
-	// the bucket name. Informational only — not used for routing.
+	// upstreamHost is logged on every access line. In split mode the
+	// dominant write traffic lands on the cache bucket; report the cache
+	// endpoint/bucket when configured. In single-client mode fall back
+	// to the origin endpoint/bucket (matches pre-track behavior).
 	upstreamHost := endpoint
+	if mode != server.CacheModeOff {
+		if ep := os.Getenv("CACHE_S3_ENDPOINT"); ep != "" {
+			upstreamHost = ep
+		} else {
+			upstreamHost = cacheBucket
+		}
+	}
 	if upstreamHost == "" {
 		upstreamHost = bucket
 	}
 	accessLogger := accesslog.NewLogger(os.Stdout)
 	handler := accesslog.Middleware(srv, accessLogger, upstreamHost)
 
-	log.Printf("Starting image proxy on port %s", port)
+	log.Printf("Starting image proxy on port %s (cache mode: %s)", port, mode)
 	if err := http.ListenAndServe(":"+port, handler); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}

@@ -103,19 +103,22 @@ func TestProcessProductImage_CustomSizes(t *testing.T) {
 	}
 }
 
-func TestProcessProductImage_DestClient(t *testing.T) {
+func TestProcessProductImage_DualWritesWhenClientsDiffer(t *testing.T) {
+	var originPuts, destPuts int
 	s3 := &mockS3Client{
 		existsFunc: func(ctx context.Context, key string) (bool, error) { return false, nil },
 		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
 			return []byte("original"), "image/jpeg", nil
 		},
 		putFunc: func(ctx context.Context, key string, data []byte, contentType string) error {
-			t.Errorf("Put should not be called on s3 client")
+			originPuts++
 			return nil
 		},
 	}
 	destS3 := &mockS3Client{
+		existsFunc: func(ctx context.Context, key string) (bool, error) { return false, nil },
 		putFunc: func(ctx context.Context, key string, data []byte, contentType string) error {
+			destPuts++
 			return nil
 		},
 	}
@@ -123,9 +126,55 @@ func TestProcessProductImage_DestClient(t *testing.T) {
 	w := NewWorker(s3, destS3, resizer, nil, "", false)
 
 	ctx := context.Background()
-	err := w.ProcessProductImage(ctx, "catalog/products/images/test.jpg")
-	if err != nil {
+	if err := w.ProcessProductImage(ctx, "catalog/products/images/test.jpg"); err != nil {
 		t.Errorf("ProcessProductImage failed: %v", err)
+	}
+
+	// 33 default sizes × 2 destinations = 33 puts on each side.
+	if originPuts != 33 {
+		t.Errorf("origin puts = %d, want 33", originPuts)
+	}
+	if destPuts != 33 {
+		t.Errorf("dest puts = %d, want 33", destPuts)
+	}
+}
+
+func TestProcessProductImage_ExistsCheckTargetsDestWhenSplit(t *testing.T) {
+	// The exists-check should hit destS3Client (the cache we're
+	// populating). If destS3.exists returns true, we skip; the origin
+	// Put must also be skipped.
+	var originPuts, destPuts int
+	s3 := &mockS3Client{
+		existsFunc: func(ctx context.Context, key string) (bool, error) {
+			t.Errorf("exists must not be called on origin in split mode; was called on %s", key)
+			return false, nil
+		},
+		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
+			return []byte("original"), "image/jpeg", nil
+		},
+		putFunc: func(ctx context.Context, key string, data []byte, contentType string) error {
+			originPuts++
+			return nil
+		},
+	}
+	destS3 := &mockS3Client{
+		existsFunc: func(ctx context.Context, key string) (bool, error) {
+			return true, nil // already cached → skip
+		},
+		putFunc: func(ctx context.Context, key string, data []byte, contentType string) error {
+			destPuts++
+			return nil
+		},
+	}
+	resizer := &mockResizer{}
+	w := NewWorker(s3, destS3, resizer, nil, "", false)
+
+	ctx := context.Background()
+	if err := w.ProcessProductImage(ctx, "catalog/products/images/test.jpg"); err != nil {
+		t.Errorf("ProcessProductImage failed: %v", err)
+	}
+	if originPuts != 0 || destPuts != 0 {
+		t.Errorf("expected zero puts when destS3 reports existing; got origin=%d dest=%d", originPuts, destPuts)
 	}
 }
 
