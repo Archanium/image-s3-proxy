@@ -108,7 +108,7 @@ Each phase is committed as a single conventional commit per the workflow doc; im
 - [x] **Task 3.5:** README updated with `CACHE_MODE` + all `CACHE_*` env vars, a "Storage backends" section explaining off/shadow/live + migration sequence, a "Read-source override" subsection on `X-Use-Cache`, and `IMAGE_TAGS` marked deprecated with the rationale.
 - [x] **Task 3.6:** Q1 resolved (carried over): IMAGE_TAGS was silently no-op on HOS for the lifetime of the deployment. Nothing outside the proxy can be relying on them. Deprecation is safe.
 - [x] **Task 3.7:** Deploy-checklist verified: Cache-Control `max-age=31536000`/`max-age=30` preserved; worker fire-and-forget (I10) unchanged; libvips lifecycle untouched (no edits to resizer.go); origin-side `OLD_S3_BUCKET` fallback still wires via `originClient.SetFallback`; `git diff go.mod go.sum` empty.
-- [ ] **Task 3.8:** Push branch and open PR.
+- [x] **Task 3.8:** Pushed `split-origin-and-cache-buckets`; opened PR #2 — https://github.com/Archanium/image-s3-proxy/pull/2
 
 **Verification gate:**
 - All four smoke scenarios (off / shadow / live / mode-validation) produced expected stderr logs and response headers.

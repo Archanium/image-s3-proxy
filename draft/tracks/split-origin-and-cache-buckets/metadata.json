@@ -2,15 +2,17 @@
   "id": "split-origin-and-cache-buckets",
   "title": "Split origin/cache buckets + canary mode (off/shadow/live) + single-GET cache-hit path",
   "type": "feature",
-  "status": "in_progress",
+  "status": "completed",
   "created": "2026-06-13T17:05:00Z",
-  "updated": "2026-06-14T00:25:00Z",
+  "updated": "2026-06-14T00:30:00Z",
+  "completed": "2026-06-14T00:30:00Z",
   "phases": {
     "total": 3,
-    "completed": 2
+    "completed": 3
   },
   "tasks": {
     "total": 27,
-    "completed": 26
-  }
+    "completed": 27
+  },
+  "pr_url": "https://github.com/Archanium/image-s3-proxy/pull/2"
 }
