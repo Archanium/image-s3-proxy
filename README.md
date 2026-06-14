@@ -1,12 +1,18 @@
 # Image Proxy
 
-A Go-based serverless image resizer and proxy with libvips, mirroring the logic of the original Node.js implementation.
+A Go-based image resizer and proxy with libvips, mirroring the logic of the
+original Node.js implementation.
 
 ## Features
-- Fetches images from S3 (or any S3-compatible storage like Hetzner Object Storage).
+- Fetches images from S3 (or any S3-compatible storage — Hetzner Object Storage,
+  Cloudflare R2, MinIO, etc.).
 - Resizes images on-the-fly based on URL patterns.
 - Caches resized images back to S3.
-- Supports worker trigger for bulk resizing.
+- Optional split-bucket topology (origin + cache) with a canary migration mode
+  for safely moving the cache layer to a different provider.
+- Structured JSON access logs to `stdout` and per-phase `Server-Timing` response
+  header.
+- Worker trigger for bulk pre-resize.
 - Configurable via environment variables.
 
 ## Usage with Makefile
@@ -31,13 +37,79 @@ make up
 
 The server will be available at `http://localhost:8080`.
 
-### Environment Variables
-- `BUCKET`: The S3 bucket name (required).
-- `AWS_REGION`: AWS region (defaults to `us-east-1`).
-- `AWS_ACCESS_KEY_ID`: AWS access key.
-- `AWS_SECRET_ACCESS_KEY`: AWS secret key.
-- `PORT`: Server port (defaults to `8080`).
-- `IMAGE_TAGS`: Comma-separated list of tags (e.g., `Project=Dreamabout,Environment=Production`).
-- `SIZES`: (Worker only) JSON array of target sizes for bulk resizing (e.g., `[[150,210],[240,0]]`). Defaults to a predefined list.
-- `FORMAT`: (Worker only) Target format for bulk resizing (e.g., `webp`, `avif`, `jpg`). Defaults to `avif`.
+## Storage backends
 
+The proxy supports two storage topologies:
+
+- **Single-bucket (default).** `CACHE_MODE=off` (or unset). Originals and resized
+  variants live in the same bucket — the historical layout.
+- **Split-bucket (canary).** `CACHE_MODE=shadow|live`. Originals live in the
+  origin bucket (where the upstream catalog system writes); resized variants
+  live in the cache bucket. Used to migrate the cache layer to a different
+  provider (e.g. Cloudflare R2) without flipping a single switch:
+
+| `CACHE_MODE` | Default read source | Write destinations |
+|--------------|---------------------|--------------------|
+| `off`        | origin (= the only bucket) | origin |
+| `shadow`     | origin              | both — origin first, then cache (populate cache without affecting reads) |
+| `live`       | cache               | both — cache first, then origin (cache is primary; origin is belt-and-suspenders) |
+
+Recommended migration sequence:
+1. Deploy with `CACHE_MODE=off`. No-op.
+2. Provision cache bucket, set `CACHE_MODE=shadow` + `CACHE_BUCKET=<cache>`. Cache populates from real traffic.
+3. Test cache read performance with the `X-Use-Cache: true` request header (see below).
+4. When cache has enough coverage, set `CACHE_MODE=live`. Default reads flip to the cache bucket.
+5. Optionally keep `live` indefinitely for belt-and-suspenders.
+
+### Read-source override (per request)
+
+When `CACHE_MODE` is `shadow` or `live`, the `X-Use-Cache` request header
+overrides the default read source for a single request. The header does NOT
+affect dual-write — it only controls which client serves the cache-hit `GET`.
+
+- `X-Use-Cache: true` — read from the cache bucket.
+- `X-Use-Cache: false` — read from the origin bucket.
+- Other values, or header absent — use the mode's default.
+
+This is intended for synthetic monitors that want to benchmark cache reads
+while real traffic stays on the default path.
+
+### Environment Variables
+
+Required:
+- `BUCKET` — the origin (and, in off mode, only) S3 bucket name.
+
+Origin bucket (always read; same env vars as before):
+- `AWS_REGION` — defaults to `us-east-1`.
+- `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` — static credentials (if unset, the AWS default credential chain is used).
+- `S3_ENDPOINT` — custom endpoint for the origin client (Hetzner / MinIO / etc.).
+
+Cache bucket (only used when `CACHE_MODE != off`):
+- `CACHE_MODE` — one of `off | shadow | live`. Default `off`.
+- `CACHE_BUCKET` — required when `CACHE_MODE != off`. Startup is fatal otherwise.
+- `CACHE_S3_ENDPOINT` — custom endpoint for the cache client (e.g. `https://<account>.r2.cloudflarestorage.com`).
+- `CACHE_AWS_ACCESS_KEY_ID` / `CACHE_AWS_SECRET_ACCESS_KEY` — cache-bucket credentials.
+- `CACHE_AWS_REGION` — inherits `AWS_REGION` when unset.
+
+Legacy fallback (origin-side migration; unchanged):
+- `OLD_S3_BUCKET`, `OLD_S3_REGION`, `OLD_S3_ACCESS_KEY_ID`, `OLD_S3_SECRET_ACCESS_KEY`, `OLD_S3_ENDPOINT` — when set, the origin client consults this bucket as a fallback for not-found lookups and copies hits back to the primary origin bucket. The cache client never has a fallback.
+
+Server:
+- `PORT` — server port. Defaults to `8080`.
+
+Worker (bulk pre-resize):
+- `SIZES` — JSON array of target sizes (e.g. `[[150,210],[240,0]]`). Defaults to a predefined list of 33.
+- `FORMAT` — target format (`webp`, `avif`, `jpg`). Defaults to `avif`.
+
+libvips tuning:
+- `VIPS_CONCURRENCY`, `VIPS_MAX_CACHE_MEM`, `VIPS_MAX_CACHE_SIZE`.
+
+Debug:
+- `DEBUG=true` — enables libvips logging.
+
+Deprecated:
+- `IMAGE_TAGS` — used to set S3 object tags. **Deprecated** as of the split-bucket
+  refactor. Neither Hetzner Object Storage nor Cloudflare R2 implement the S3
+  Tagging APIs, so the header was effectively silently dropped on HOS and would
+  hard-fail on R2. If set, the proxy logs a single deprecation warning at
+  startup and discards the value.
