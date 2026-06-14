@@ -19,7 +19,7 @@ func TestMain(m *testing.M) {
 type mockS3Client struct {
 	existsFunc func(ctx context.Context, key string) (bool, error)
 	getFunc    func(ctx context.Context, key string) ([]byte, string, error)
-	putFunc    func(ctx context.Context, key string, data []byte, contentType string, tags map[string]string) error
+	putFunc    func(ctx context.Context, key string, data []byte, contentType string) error
 }
 
 func (m *mockS3Client) Exists(ctx context.Context, key string) (bool, error) {
@@ -31,8 +31,8 @@ func (m *mockS3Client) Exists(ctx context.Context, key string) (bool, error) {
 func (m *mockS3Client) Get(ctx context.Context, key string) ([]byte, string, error) {
 	return m.getFunc(ctx, key)
 }
-func (m *mockS3Client) Put(ctx context.Context, key string, data []byte, contentType string, tags map[string]string) error {
-	return m.putFunc(ctx, key, data, contentType, tags)
+func (m *mockS3Client) Put(ctx context.Context, key string, data []byte, contentType string) error {
+	return m.putFunc(ctx, key, data, contentType)
 }
 
 type mockResizer struct{}
@@ -50,13 +50,13 @@ func TestProcessProductImage(t *testing.T) {
 		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
 			return []byte("original"), "image/jpeg", nil
 		},
-		putFunc: func(ctx context.Context, key string, data []byte, contentType string, tags map[string]string) error {
+		putFunc: func(ctx context.Context, key string, data []byte, contentType string) error {
 			putCount++
 			return nil
 		},
 	}
 	resizer := &mockResizer{}
-	w := NewWorker(s3, nil, resizer, nil, nil, "", false)
+	w := NewWorker(s3, nil, resizer, nil, "", false)
 
 	ctx := context.Background()
 	err := w.ProcessProductImage(ctx, "catalog/products/images/test.jpg")
@@ -79,14 +79,14 @@ func TestProcessProductImage_CustomSizes(t *testing.T) {
 		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
 			return []byte("original"), "image/jpeg", nil
 		},
-		putFunc: func(ctx context.Context, key string, data []byte, contentType string, tags map[string]string) error {
+		putFunc: func(ctx context.Context, key string, data []byte, contentType string) error {
 			putCount++
 			return nil
 		},
 	}
 	resizer := &mockResizer{}
 	customSizes := [][]int{{100, 100}, {200, 200}}
-	w := NewWorker(s3, nil, resizer, nil, customSizes, "webp", false)
+	w := NewWorker(s3, nil, resizer, customSizes, "webp", false)
 
 	ctx := context.Background()
 	err := w.ProcessProductImage(ctx, "catalog/products/images/test.jpg")
@@ -109,18 +109,18 @@ func TestProcessProductImage_DestClient(t *testing.T) {
 		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
 			return []byte("original"), "image/jpeg", nil
 		},
-		putFunc: func(ctx context.Context, key string, data []byte, contentType string, tags map[string]string) error {
+		putFunc: func(ctx context.Context, key string, data []byte, contentType string) error {
 			t.Errorf("Put should not be called on s3 client")
 			return nil
 		},
 	}
 	destS3 := &mockS3Client{
-		putFunc: func(ctx context.Context, key string, data []byte, contentType string, tags map[string]string) error {
+		putFunc: func(ctx context.Context, key string, data []byte, contentType string) error {
 			return nil
 		},
 	}
 	resizer := &mockResizer{}
-	w := NewWorker(s3, destS3, resizer, nil, nil, "", false)
+	w := NewWorker(s3, destS3, resizer, nil, "", false)
 
 	ctx := context.Background()
 	err := w.ProcessProductImage(ctx, "catalog/products/images/test.jpg")
@@ -137,13 +137,13 @@ func TestProcessProductImage_ForceOverwrite_Skip(t *testing.T) {
 		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
 			return []byte("original"), "image/jpeg", nil
 		},
-		putFunc: func(ctx context.Context, key string, data []byte, contentType string, tags map[string]string) error {
+		putFunc: func(ctx context.Context, key string, data []byte, contentType string) error {
 			t.Errorf("Put should not be called when file exists and forceOverwrite is false")
 			return nil
 		},
 	}
 	resizer := &mockResizer{}
-	w := NewWorker(s3, nil, resizer, nil, nil, "", false) // forceOverwrite = false
+	w := NewWorker(s3, nil, resizer, nil, "", false) // forceOverwrite = false
 
 	ctx := context.Background()
 	err := w.ProcessProductImage(ctx, "catalog/products/images/test.jpg")
@@ -161,13 +161,13 @@ func TestProcessProductImage_ForceOverwrite_True(t *testing.T) {
 		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
 			return []byte("original"), "image/jpeg", nil
 		},
-		putFunc: func(ctx context.Context, key string, data []byte, contentType string, tags map[string]string) error {
+		putFunc: func(ctx context.Context, key string, data []byte, contentType string) error {
 			putCount++
 			return nil
 		},
 	}
 	resizer := &mockResizer{}
-	w := NewWorker(s3, nil, resizer, nil, nil, "", true) // forceOverwrite = true
+	w := NewWorker(s3, nil, resizer, nil, "", true) // forceOverwrite = true
 
 	ctx := context.Background()
 	err := w.ProcessProductImage(ctx, "catalog/products/images/test.jpg")

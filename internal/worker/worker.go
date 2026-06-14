@@ -13,7 +13,6 @@ type Worker struct {
 	s3Client       types.S3Client
 	destS3Client   types.S3Client
 	resizer        types.Resizer
-	tags           map[string]string
 	sizes          [][]int
 	format         string
 	forceOverwrite bool
@@ -26,7 +25,7 @@ var DefaultSizes = [][]int{
 	{1200, 1680}, {1230, 1722}, {1280, 0}, {1280, 1792}, {1536, 0}, {1600, 2240}, {1638, 0}, {1840, 0}, {2560, 0},
 }
 
-func NewWorker(s3Client types.S3Client, destS3Client types.S3Client, resizer types.Resizer, tags map[string]string, sizes [][]int, format string, forceOverwrite bool) *Worker {
+func NewWorker(s3Client types.S3Client, destS3Client types.S3Client, resizer types.Resizer, sizes [][]int, format string, forceOverwrite bool) *Worker {
 	if len(sizes) == 0 {
 		sizes = DefaultSizes
 	}
@@ -37,7 +36,6 @@ func NewWorker(s3Client types.S3Client, destS3Client types.S3Client, resizer typ
 		s3Client:       s3Client,
 		destS3Client:   destS3Client,
 		resizer:        resizer,
-		tags:           tags,
 		sizes:          sizes,
 		format:         format,
 		forceOverwrite: forceOverwrite,
@@ -90,7 +88,7 @@ func (w *Worker) ProcessProductImage(ctx context.Context, origKey string) error 
 			client = w.destS3Client
 		}
 
-		err = client.Put(ctx, thumbKey, resizedData, contentType, w.tags)
+		err = client.Put(ctx, thumbKey, resizedData, contentType)
 		if err != nil {
 			log.Printf("Failed to save thumbnail %s: %v", thumbKey, err)
 		} else {
