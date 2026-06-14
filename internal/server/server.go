@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"image-proxy/internal/accesslog"
 	"image-proxy/internal/types"
 	"image-proxy/internal/worker"
@@ -11,6 +13,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 var (
@@ -22,19 +26,152 @@ var (
 	folderImageRegex = regexp.MustCompile(`^/?(?P<clientId>\d{1,3})(-(?P<group>[\w]+))?/((?P<version>\d{1})?/?)(?P<images>images/)(?P<folder>[^/]+)/(?P<path>[\w\.\-]+)$`)
 )
 
-type Server struct {
-	s3Client types.S3Client
-	resizer  types.Resizer
-	tags     map[string]string
-	worker   *worker.Worker
+// CacheMode controls how the proxy uses its origin and cache S3 clients.
+//
+//   - CacheModeOff: cache client is ignored. All reads and writes go to the
+//     origin client. This is the no-op default and preserves single-client
+//     behavior.
+//   - CacheModeShadow: cache is being populated. Default reads come from
+//     the origin client; writes are dual-written (origin first, then cache).
+//   - CacheModeLive: cache is primary. Default reads come from the cache
+//     client; writes are dual-written (cache first, then origin).
+type CacheMode int
+
+const (
+	CacheModeOff CacheMode = iota
+	CacheModeShadow
+	CacheModeLive
+)
+
+// ParseCacheMode accepts case-insensitive "off", "shadow", "live" or the
+// empty string (which maps to off). Any other value returns an error.
+func ParseCacheMode(s string) (CacheMode, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "off":
+		return CacheModeOff, nil
+	case "shadow":
+		return CacheModeShadow, nil
+	case "live":
+		return CacheModeLive, nil
+	default:
+		return CacheModeOff, fmt.Errorf("invalid CACHE_MODE %q (expected off|shadow|live)", s)
+	}
 }
 
-func NewServer(s3Client types.S3Client, resizer types.Resizer, tags map[string]string, sizes [][]int, format string) *Server {
+func (m CacheMode) String() string {
+	switch m {
+	case CacheModeShadow:
+		return "shadow"
+	case CacheModeLive:
+		return "live"
+	default:
+		return "off"
+	}
+}
+
+// readHeaderUseCache is the per-request override for the cache-hit read
+// source. "true" forces a read from the cache client; "false" forces a read
+// from the origin client. Any other value (or absence) defers to the
+// configured CacheMode.
+const readHeaderUseCache = "X-Use-Cache"
+
+type Server struct {
+	originClient types.S3Client
+	cacheClient  types.S3Client
+	resizer      types.Resizer
+	worker       *worker.Worker
+	mode         CacheMode
+}
+
+// NewServer constructs a Server in CacheModeOff. Both client roles are
+// served by the same instance — this is the backwards-compatible
+// single-client constructor used by tests and by main.go when CACHE_MODE
+// is unset.
+func NewServer(s3Client types.S3Client, resizer types.Resizer, sizes [][]int, format string) *Server {
+	return NewServerWithMode(s3Client, s3Client, CacheModeOff, resizer, sizes, format)
+}
+
+// NewServerWithMode constructs a Server with explicit origin and cache
+// clients plus a mode. originClient is where the upstream catalog system
+// writes; cacheClient is where the proxy writes resized variants. The
+// worker is constructed with both clients so its bulk pre-resize path
+// dual-writes when the mode dictates it.
+func NewServerWithMode(originClient, cacheClient types.S3Client, mode CacheMode, resizer types.Resizer, sizes [][]int, format string) *Server {
 	return &Server{
-		s3Client: s3Client,
-		resizer:  resizer,
-		tags:     tags,
-		worker:   worker.NewWorker(s3Client, nil, resizer, tags, sizes, format, false),
+		originClient: originClient,
+		cacheClient:  cacheClient,
+		resizer:      resizer,
+		worker:       worker.NewWorker(originClient, cacheClient, resizer, sizes, format, false),
+		mode:         mode,
+	}
+}
+
+// effectiveReadClient returns the S3Client to use for the cache-hit Get on
+// this request. The default comes from the CacheMode (origin in off /
+// shadow, cache in live). An X-Use-Cache header on the request can flip
+// the choice for a single request.
+func (s *Server) effectiveReadClient(r *http.Request) types.S3Client {
+	if s.mode == CacheModeOff {
+		return s.originClient
+	}
+	useCache := s.mode == CacheModeLive
+	switch strings.ToLower(r.Header.Get(readHeaderUseCache)) {
+	case "true":
+		useCache = true
+	case "false":
+		useCache = false
+	}
+	if useCache {
+		return s.cacheClient
+	}
+	return s.originClient
+}
+
+// putBoth writes data under key to the proxy's write targets, respecting
+// the CacheMode:
+//   - off: a single timed "s3-put" against the cache client (which is the
+//     same as the origin in off mode), preserving the historical phase name.
+//   - shadow: origin first as "s3-put-origin", then cache as "s3-put-cache".
+//   - live: cache first as "s3-put-cache", then origin as "s3-put-origin".
+//
+// Failures on either side are logged but do not stop the second write or
+// fail the caller's request. This matches the existing "Put failure does
+// not break the response" contract.
+func (s *Server) putBoth(ctx context.Context, key string, data []byte, contentType string) {
+	if s.mode == CacheModeOff {
+		if err := s.time(ctx, "s3-put", func() error {
+			return s.cacheClient.Put(ctx, key, data, contentType)
+		}); err != nil {
+			log.Printf("S3 Save error: %v", err)
+		}
+		return
+	}
+
+	type writeTarget struct {
+		side   string // "origin" or "cache"
+		phase  string
+		client types.S3Client
+	}
+	var order []writeTarget
+	switch s.mode {
+	case CacheModeShadow:
+		order = []writeTarget{
+			{"origin", "s3-put-origin", s.originClient},
+			{"cache", "s3-put-cache", s.cacheClient},
+		}
+	case CacheModeLive:
+		order = []writeTarget{
+			{"cache", "s3-put-cache", s.cacheClient},
+			{"origin", "s3-put-origin", s.originClient},
+		}
+	}
+	for _, wt := range order {
+		wt := wt
+		if err := s.time(ctx, wt.phase, func() error {
+			return wt.client.Put(ctx, key, data, contentType)
+		}); err != nil {
+			log.Printf("dual-write %s failed for %s: %v", wt.side, key, err)
+		}
 	}
 }
 
@@ -61,34 +198,28 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Check if the key exists in S3
-	var exists bool
-	err := s.time(ctx, "s3-exists", func() error {
+	// 1. Speculative GET on the effective read client (cache or origin,
+	// depending on mode + X-Use-Cache header). A NoSuchKey / NotFound is
+	// treated as a clean miss; any other error is logged and we fall
+	// through (fail-open, matching the historical Exists-then-fall-through
+	// behavior — but now explicitly classified, not silently misclassified).
+	readClient := s.effectiveReadClient(r)
+	var data []byte
+	var contentType string
+	getErr := s.time(ctx, "s3-get", func() error {
 		var e error
-		exists, e = s.s3Client.Exists(ctx, key)
+		data, contentType, e = readClient.Get(ctx, key)
 		return e
 	})
-	if err != nil {
-		log.Printf("Error checking S3 existence for %s: %v", key, err)
+	if getErr == nil {
+		log.Printf("Key %s found in cache layer, serving directly", key)
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Cache-Control", "max-age=31536000")
+		w.Write(data)
+		return
 	}
-
-	if exists {
-		log.Printf("Key %s found in S3, serving directly", key)
-		// Serve from S3
-		var data []byte
-		var contentType string
-		err := s.time(ctx, "s3-get", func() error {
-			var e error
-			data, contentType, e = s.s3Client.Get(ctx, key)
-			return e
-		})
-		if err == nil {
-			w.Header().Set("Content-Type", contentType)
-			w.Header().Set("Cache-Control", "max-age=31536000")
-			w.Write(data)
-			return
-		}
-		log.Printf("Error getting from S3 %s: %v", key, err)
+	if !isNotFoundErr(getErr) {
+		log.Printf("cache client error for %s: %v", key, getErr)
 	}
 
 	// 2. If not found, try to match patterns for resizing
@@ -98,13 +229,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if normalizedKey != key {
 			log.Printf("Normalized key: %s", normalizedKey)
 		}
-		s.handleResize(w, ctx, normalizedKey, match, 1)
+		s.handleResize(w, r, normalizedKey, match, 1)
 		return
 	}
 
 	if match := getNamedGroups(fileRegex, key); match != nil {
 		log.Printf("Key %s matched file regex", key)
-		s.handleFile(w, ctx, key, match)
+		s.handleFile(w, r, key, match)
 		return
 	}
 
@@ -113,30 +244,26 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		normalizedKey := s.getNormalizedKey(match, 3)
 		if normalizedKey != key {
 			log.Printf("Normalized key: %s", normalizedKey)
-			// Check if the normalized key exists in S3
-			var nExists bool
-			nErr := s.time(ctx, "s3-exists", func() error {
+			// Re-check the normalized key with the effective read client.
+			var nData []byte
+			var nContentType string
+			nErr := s.time(ctx, "s3-get", func() error {
 				var e error
-				nExists, e = s.s3Client.Exists(ctx, normalizedKey)
+				nData, nContentType, e = readClient.Get(ctx, normalizedKey)
 				return e
 			})
-			if nErr == nil && nExists {
-				log.Printf("Normalized key %s found in S3, serving", normalizedKey)
-				var data []byte
-				var contentType string
-				if e := s.time(ctx, "s3-get", func() error {
-					var ge error
-					data, contentType, ge = s.s3Client.Get(ctx, normalizedKey)
-					return ge
-				}); e == nil {
-					w.Header().Set("Content-Type", contentType)
-					w.Header().Set("Cache-Control", "max-age=31536000")
-					w.Write(data)
-					return
-				}
+			if nErr == nil {
+				log.Printf("Normalized key %s found in cache layer, serving", normalizedKey)
+				w.Header().Set("Content-Type", nContentType)
+				w.Header().Set("Cache-Control", "max-age=31536000")
+				w.Write(nData)
+				return
+			}
+			if !isNotFoundErr(nErr) {
+				log.Printf("cache client error for normalized key %s: %v", normalizedKey, nErr)
 			}
 		}
-		s.handleResize(w, ctx, normalizedKey, match, 3)
+		s.handleResize(w, r, normalizedKey, match, 3)
 		return
 	}
 
@@ -145,7 +272,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.httpError(w, "Not Found", http.StatusNotFound)
 }
 
-func (s *Server) handleResize(w http.ResponseWriter, ctx context.Context, key string, groups map[string]string, regexType int) {
+func (s *Server) handleResize(w http.ResponseWriter, r *http.Request, key string, groups map[string]string, regexType int) {
+	ctx := r.Context()
 	var originalKey string
 	var opts types.ImageOptions
 
@@ -198,7 +326,8 @@ func (s *Server) handleResize(w http.ResponseWriter, ctx context.Context, key st
 		opts.Fit = "inside"
 	}
 
-	// Fetch original from S3
+	// Fetch original from S3 (origin client only — originals live where
+	// the upstream catalog system writes them).
 	var data []byte
 	var err error
 
@@ -237,7 +366,7 @@ func (s *Server) handleResize(w http.ResponseWriter, ctx context.Context, key st
 		k := k
 		err = s.time(ctx, "s3-get", func() error {
 			var e error
-			data, _, e = s.s3Client.Get(ctx, k)
+			data, _, e = s.originClient.Get(ctx, k)
 			return e
 		})
 		if err == nil {
@@ -265,16 +394,9 @@ func (s *Server) handleResize(w http.ResponseWriter, ctx context.Context, key st
 		return
 	}
 
-	// Save back to S3 before responding so the Server-Timing header
-	// reflects the s3-put cost. The existing semantics are preserved: a
-	// Put failure is logged and the resized bytes are still returned to
-	// the client.
-	err = s.time(ctx, "s3-put", func() error {
-		return s.s3Client.Put(ctx, key, resizedData, contentType, s.tags)
-	})
-	if err != nil {
-		log.Printf("S3 Save error: %v", err)
-	}
+	// Save back via the dual-write helper. The mode dictates target(s)
+	// and ordering; failure is logged but does not fail the request.
+	s.putBoth(ctx, key, resizedData, contentType)
 
 	// Serve
 	w.Header().Set("Content-Type", contentType)
@@ -287,7 +409,8 @@ func (s *Server) httpError(w http.ResponseWriter, error string, code int) {
 	http.Error(w, error, code)
 }
 
-func (s *Server) handleFile(w http.ResponseWriter, ctx context.Context, key string, groups map[string]string) {
+func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, key string, groups map[string]string) {
+	ctx := r.Context()
 	fileId := groups["fileId"]
 	path := groups["path"]
 	clientId := groups["clientId"]
@@ -297,7 +420,7 @@ func (s *Server) handleFile(w http.ResponseWriter, ctx context.Context, key stri
 	var contentType string
 	err := s.time(ctx, "s3-get", func() error {
 		var e error
-		data, contentType, e = s.s3Client.Get(ctx, originalKey)
+		data, contentType, e = s.originClient.Get(ctx, originalKey)
 		return e
 	})
 	if err != nil {
@@ -309,14 +432,8 @@ func (s *Server) handleFile(w http.ResponseWriter, ctx context.Context, key stri
 		contentType = "application/octet-stream"
 	}
 
-	// Save back to S3 (caching) before responding so Server-Timing
-	// includes s3-put. Failure is logged but does not fail the request.
-	err = s.time(ctx, "s3-put", func() error {
-		return s.s3Client.Put(ctx, key, data, contentType, s.tags)
-	})
-	if err != nil {
-		log.Printf("S3 Save error: %v", err)
-	}
+	// Dual-write the cached copy.
+	s.putBoth(ctx, key, data, contentType)
 
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "max-age=31536000")
@@ -411,4 +528,20 @@ func getNamedGroups(re *regexp.Regexp, s string) map[string]string {
 // identically except for the closure indirection.
 func (s *Server) time(ctx context.Context, phase string, fn func() error) error {
 	return accesslog.TimingsFromContext(ctx).Track(phase, fn)
+}
+
+// isNotFoundErr classifies an error as "object does not exist". Mirrors
+// the s3 package's classifier (typed errors first, string fallback for
+// S3-compatible providers).
+func isNotFoundErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	var nsk *s3types.NoSuchKey
+	var nf *s3types.NotFound
+	if errors.As(err, &nsk) || errors.As(err, &nf) {
+		return true
+	}
+	s := err.Error()
+	return strings.Contains(s, "NoSuchKey") || strings.Contains(s, "NotFound")
 }
