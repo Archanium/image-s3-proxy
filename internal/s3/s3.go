@@ -3,16 +3,17 @@ package s3
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
-	"net/url"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 type s3API interface {
@@ -24,7 +25,6 @@ type s3API interface {
 type Client struct {
 	client         s3API
 	bucket         string
-	defaultTags    map[string]string
 	fallbackClient *Client
 }
 
@@ -71,8 +71,25 @@ func (c *Client) SetFallback(fallback *Client) {
 	c.fallbackClient = fallback
 }
 
-func (c *Client) SetDefaultTags(tags map[string]string) {
-	c.defaultTags = tags
+// isNotFound classifies an S3 error as "object does not exist".
+//
+// Strategy: prefer AWS SDK v2 typed errors (*types.NoSuchKey / *types.NotFound)
+// which are the canonical signals on real AWS S3 endpoints. Some S3-compatible
+// providers (Hetzner Object Storage among them) wrap the underlying response
+// such that the typed error is not directly extractable; fall back to
+// string-matching the rendered error text to preserve operational behavior
+// against those providers.
+func isNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	var nsk *s3types.NoSuchKey
+	var nf *s3types.NotFound
+	if errors.As(err, &nsk) || errors.As(err, &nf) {
+		return true
+	}
+	s := err.Error()
+	return strings.Contains(s, "NoSuchKey") || strings.Contains(s, "NotFound")
 }
 
 func (c *Client) Exists(ctx context.Context, key string) (bool, error) {
@@ -81,7 +98,7 @@ func (c *Client) Exists(ctx context.Context, key string) (bool, error) {
 		Key:    aws.String(key),
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "NotFound") || strings.Contains(err.Error(), "NoSuchKey") {
+		if isNotFound(err) {
 			// Check fallback if configured
 			if c.fallbackClient != nil {
 				log.Printf("Not found in primary bucket %s, checking fallback bucket %s for existence", c.bucket, c.fallbackClient.bucket)
@@ -97,7 +114,8 @@ func (c *Client) Exists(ctx context.Context, key string) (bool, error) {
 			}
 			return false, nil
 		}
-		// In AWS SDK v2, errors are usually types.NotFound or types.NoSuchKey but HeadObject might return 404
+		// Non-not-found errors propagate to the caller so they can be
+		// classified at the server layer (logged vs. silently dropped).
 		return false, err
 	}
 	return true, nil
@@ -110,12 +128,12 @@ func (c *Client) Get(ctx context.Context, key string) ([]byte, string, error) {
 		Key:    aws.String(key),
 	})
 	if err != nil {
-		if (strings.Contains(err.Error(), "NotFound") || strings.Contains(err.Error(), "NoSuchKey")) && c.fallbackClient != nil {
+		if isNotFound(err) && c.fallbackClient != nil {
 			log.Printf("Not found in primary bucket %s, trying fallback bucket %s", c.bucket, c.fallbackClient.bucket)
 			data, contentType, fallbackErr := c.fallbackClient.Get(ctx, key)
 
 			// If not found in fallback with original key, try stripping the first prefix (clientId)
-			if fallbackErr != nil && (strings.Contains(fallbackErr.Error(), "NotFound") || strings.Contains(fallbackErr.Error(), "NoSuchKey")) {
+			if isNotFound(fallbackErr) {
 				if parts := strings.SplitN(key, "/", 2); len(parts) > 1 {
 					log.Printf("Not found in fallback bucket %s with original key, trying stripped key: %s", c.fallbackClient.bucket, parts[1])
 					data, contentType, fallbackErr = c.fallbackClient.Get(ctx, parts[1])
@@ -124,8 +142,10 @@ func (c *Client) Get(ctx context.Context, key string) ([]byte, string, error) {
 
 			if fallbackErr == nil {
 				log.Printf("Found in fallback bucket, moving to primary bucket: %s", key)
-				// Save it back to the primary bucket for future requests
-				if putErr := c.Put(ctx, key, data, contentType, c.defaultTags); putErr != nil {
+				// Save it back to the primary bucket for future requests.
+				// Failure here is logged but not propagated — the client
+				// still gets the bytes we already have.
+				if putErr := c.Put(ctx, key, data, contentType); putErr != nil {
 					log.Printf("Warning: Failed to move object to primary bucket %s: %v", c.bucket, putErr)
 				}
 				return data, contentType, nil
@@ -150,24 +170,13 @@ func (c *Client) Get(ctx context.Context, key string) ([]byte, string, error) {
 	return data, contentType, nil
 }
 
-func (c *Client) Put(ctx context.Context, key string, data []byte, contentType string, tags map[string]string) error {
-	log.Printf("Uploading to S3: bucket=%s, key=%s, contentType=%s, tags=%v", c.bucket, key, contentType, tags)
-	var tagging *string
-	if len(tags) > 0 {
-		var pairs []string
-		for k, v := range tags {
-			pairs = append(pairs, url.QueryEscape(k)+"="+url.QueryEscape(v))
-		}
-		t := strings.Join(pairs, "&")
-		tagging = &t
-	}
-
+func (c *Client) Put(ctx context.Context, key string, data []byte, contentType string) error {
+	log.Printf("Uploading to S3: bucket=%s, key=%s, contentType=%s", c.bucket, key, contentType)
 	_, err := c.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(c.bucket),
 		Key:         aws.String(key),
 		Body:        bytes.NewReader(data),
 		ContentType: aws.String(contentType),
-		Tagging:     tagging,
 	})
 	return err
 }
