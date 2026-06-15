@@ -57,7 +57,7 @@ func TestLogger_TopLevelKeyOrder(t *testing.T) {
 	line := strings.TrimRight(buf.String(), "\n")
 	// Confirm the top-level keys appear in the documented order. This is a
 	// structural promise that monitoring queries depend on.
-	wantOrder := []string{"@timestamp", "extra", "user", "request", "response", "upstream"}
+	wantOrder := []string{"@timestamp", "extra", "user", "request", "response", "upstream", "timings"}
 	prev := -1
 	for _, key := range wantOrder {
 		needle := `"` + key + `":`
@@ -96,6 +96,62 @@ func TestLogger_UserBlockHasExactlyFiveKeys(t *testing.T) {
 		if !wantKeys[k] {
 			t.Errorf("unexpected user key %q (cart must not appear)", k)
 		}
+	}
+}
+
+func TestEntry_TimingsKeyAlwaysPresent(t *testing.T) {
+	// Even when no phases ran, the emitted JSON entry must include a
+	// "timings" key with an empty object value so log-parsing queries
+	// that test for key presence don't break.
+	var buf bytes.Buffer
+	lg := NewLogger(&buf)
+
+	lg.Emit(&Entry{
+		Timestamp: "t",
+		Extra:     EntryExtra{CorrelationID: "c"},
+		Timings:   map[string]float64{},
+	})
+
+	line := strings.TrimRight(buf.String(), "\n")
+	if !strings.Contains(line, `"timings":{}`) {
+		t.Errorf("expected '\"timings\":{}' in emitted line; got:\n%s", line)
+	}
+
+	var generic map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(line), &generic); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if _, ok := generic["timings"]; !ok {
+		t.Errorf("'timings' key missing from top-level object")
+	}
+}
+
+func TestEntry_TimingsRoundTrip(t *testing.T) {
+	// Emit a populated timings map; parse back; assert the values match
+	// exactly (these are floats from rounded inputs, so equality is safe).
+	var buf bytes.Buffer
+	lg := NewLogger(&buf)
+
+	lg.Emit(&Entry{
+		Timestamp: "t",
+		Timings: map[string]float64{
+			"s3-get": 0.123,
+			"resize": 0.045,
+		},
+	})
+
+	var got Entry
+	if err := json.Unmarshal(bytes.TrimRight(buf.Bytes(), "\n"), &got); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got.Timings["s3-get"] != 0.123 {
+		t.Errorf("timings[s3-get] = %v, want 0.123", got.Timings["s3-get"])
+	}
+	if got.Timings["resize"] != 0.045 {
+		t.Errorf("timings[resize] = %v, want 0.045", got.Timings["resize"])
+	}
+	if len(got.Timings) != 2 {
+		t.Errorf("timings has %d keys, want exactly 2; got %v", len(got.Timings), got.Timings)
 	}
 }
 

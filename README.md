@@ -10,8 +10,8 @@ original Node.js implementation.
 - Caches resized images back to S3.
 - Optional split-bucket topology (origin + cache) with a canary migration mode
   for safely moving the cache layer to a different provider.
-- Structured JSON access logs to `stdout` and per-phase `Server-Timing` response
-  header.
+- Structured JSON access logs to `stdout`, including a per-phase `timings`
+  breakdown, plus a matching per-phase `Server-Timing` response header.
 - Worker trigger for bulk pre-resize.
 - Configurable via environment variables.
 
@@ -157,3 +157,23 @@ Deprecated:
   Tagging APIs, so the header was effectively silently dropped on HOS and would
   hard-fail on R2. If set, the proxy logs a single deprecation warning at
   startup and discards the value.
+
+## Access log shape
+
+Every request emits one JSON line to `stdout`. The shape mirrors the platform's
+nginx access-log schema (so the same dashboards work across services), with two
+additions specific to this Go origin:
+
+- **`upstream.responseTime`** — the *sum* of all internal phase durations
+  (S3 calls + libvips) in seconds. Always present.
+- **`timings`** — a sparse map of per-phase wall-clock durations, also in
+  seconds with 3-decimal precision. Same data as the `Server-Timing` response
+  header, formatted for log shippers. The key is always present (`{}` on
+  requests where no phases ran); only phases that actually executed appear
+  inside. Phase keys are: `s3-get`, `resize`, `s3-put` (off-mode), and
+  `s3-put-cache` / `s3-put-origin` (shadow/live modes). Future phase names
+  added via `s.time(ctx, "...", ...)` flow through automatically.
+
+`Server-Timing` response header uses milliseconds (per W3C); the JSON log uses
+seconds (consistent with `request.time` and `upstream.responseTime`). Different
+consumers, different conventions; same underlying data.

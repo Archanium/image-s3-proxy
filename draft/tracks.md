@@ -28,6 +28,13 @@ synced_to_commit: "21fdfb3c6f1fc77bc3f10c54bd56e804e5ff0d86"
 - **PR:** https://github.com/Archanium/image-s3-proxy/pull/4
 - **Path:** `./tracks/extend-worker-payload/`
 
+### add-timings-to-access-log - Include phase timings in the JSON access log
+- **Status:** [x] Completed 2026-06-16
+- **Phases:** 1/1
+- **Tasks:** 10/10
+- **PR:** https://github.com/Archanium/image-s3-proxy/pull/3
+- **Path:** `./tracks/add-timings-to-access-log/`
+
 ### split-origin-and-cache-buckets - Split origin/cache buckets + canary mode (off/shadow/live)
 - **Status:** [x] Completed 2026-06-14
 - **Phases:** 3/3

@@ -10,13 +10,21 @@ import (
 // Entry is the JSON shape emitted per request. Field order on the wire is
 // fixed by the struct field declaration order; nested key order is
 // similarly fixed by the embedded struct declarations below.
+//
+// Timings is a sparse map of phase name to wall-clock duration in seconds
+// (3-decimal precision), mirroring the per-phase data also surfaced in the
+// Server-Timing response header. The map is always non-nil (even when no
+// phases ran) so log-parsing queries that test for the field's presence
+// see it on every line. Phase keys are emitted in alphabetical order by
+// encoding/json's documented map behaviour.
 type Entry struct {
-	Timestamp string        `json:"@timestamp"`
-	Extra     EntryExtra    `json:"extra"`
-	User      EntryUser     `json:"user"`
-	Request   EntryRequest  `json:"request"`
-	Response  EntryResponse `json:"response"`
-	Upstream  EntryUpstream `json:"upstream"`
+	Timestamp string             `json:"@timestamp"`
+	Extra     EntryExtra         `json:"extra"`
+	User      EntryUser          `json:"user"`
+	Request   EntryRequest       `json:"request"`
+	Response  EntryResponse      `json:"response"`
+	Upstream  EntryUpstream      `json:"upstream"`
+	Timings   map[string]float64 `json:"timings"`
 }
 
 // EntryExtra carries the per-request correlation identifier.
