@@ -3,7 +3,6 @@ package server
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"image-proxy/internal/accesslog"
@@ -17,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
@@ -127,30 +127,308 @@ func TestServeHTTP_Resize(t *testing.T) {
 	}
 }
 
-func TestWorkerTrigger(t *testing.T) {
+// --- worker trigger (track extend-worker-payload) ---------------------
+
+// newTriggerServer builds a Server with the supplied S3 + resizer fixtures.
+// The detached goroutine inside handleWorkerTrigger runs after the HTTP
+// response — callers that want to wait for it should use the channel-based
+// fixture in TestWorkerTrigger_FireAndForget.
+func newTriggerServer(t *testing.T, s3 *mockS3Client, rz *mockResizer) *Server {
+	t.Helper()
+	return NewServer(s3, rz, nil, "")
+}
+
+func triggerRequest(body string) *http.Request {
+	req := httptest.NewRequest("POST", "/_/worker/trigger", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
+func TestWorkerTrigger_HappyPath(t *testing.T) {
+	var putKeys []string
+	var mu sync.Mutex
 	s3 := &mockS3Client{
 		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
-			return []byte("original-data"), "image/jpeg", nil
+			return []byte("orig"), "image/jpeg", nil
+		},
+		putFunc: func(ctx context.Context, key string, data []byte, contentType string) error {
+			mu.Lock()
+			defer mu.Unlock()
+			putKeys = append(putKeys, key)
+			return nil
+		},
+	}
+	rz := &mockResizer{
+		resizeFunc: func(data []byte, opts types.ImageOptions) ([]byte, string, error) {
+			return []byte("resized"), "image/" + opts.Format, nil
+		},
+	}
+	srv := newTriggerServer(t, s3, rz)
+
+	body := `{"clientId":"39","version":"3","images":["foo.jpg"],"sizes":[[200,0]],"formats":["avif","webp"]}`
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, triggerRequest(body))
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body=%s", w.Code, w.Body.String())
+	}
+
+	// Allow the detached goroutine to run. Bounded sleep is fine here
+	// because the mock work is in-memory.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		done := len(putKeys) == 2
+		mu.Unlock()
+		if done {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(putKeys) != 2 {
+		t.Errorf("put count = %d, want 2; keys=%v", len(putKeys), putKeys)
+	}
+	wantPrefix := "39/3/images/products/200/0/foo.jpg."
+	for _, k := range putKeys {
+		if !strings.HasPrefix(k, wantPrefix) {
+			t.Errorf("put key %q must start with %q", k, wantPrefix)
+		}
+	}
+}
+
+func TestWorkerTrigger_MissingClientID(t *testing.T) {
+	srv := newTriggerServer(t, &mockS3Client{}, &mockResizer{})
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, triggerRequest(
+		`{"images":["foo.jpg"],"formats":["avif"]}`))
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "clientId") {
+		t.Errorf("error body should mention clientId; got %q", w.Body.String())
+	}
+}
+
+func TestWorkerTrigger_MissingImages(t *testing.T) {
+	srv := newTriggerServer(t, &mockS3Client{}, &mockResizer{})
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, triggerRequest(
+		`{"clientId":"39","formats":["avif"]}`))
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "images") {
+		t.Errorf("error body should mention images; got %q", w.Body.String())
+	}
+}
+
+func TestWorkerTrigger_MissingFormats(t *testing.T) {
+	srv := newTriggerServer(t, &mockS3Client{}, &mockResizer{})
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, triggerRequest(
+		`{"clientId":"39","images":["foo.jpg"]}`))
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "formats") {
+		t.Errorf("error body should mention formats; got %q", w.Body.String())
+	}
+}
+
+func TestWorkerTrigger_InvalidFormat(t *testing.T) {
+	srv := newTriggerServer(t, &mockS3Client{}, &mockResizer{})
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, triggerRequest(
+		`{"clientId":"39","images":["foo.jpg"],"formats":["avif","tiff"]}`))
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "tiff") {
+		t.Errorf("error body should name the invalid format 'tiff'; got %q", w.Body.String())
+	}
+}
+
+func TestWorkerTrigger_InvalidSizesRow(t *testing.T) {
+	srv := newTriggerServer(t, &mockS3Client{}, &mockResizer{})
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, triggerRequest(
+		`{"clientId":"39","images":["foo.jpg"],"formats":["avif"],"sizes":[[200]]}`))
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "sizes") {
+		t.Errorf("error body should mention sizes; got %q", w.Body.String())
+	}
+}
+
+func TestWorkerTrigger_NegativeSize(t *testing.T) {
+	srv := newTriggerServer(t, &mockS3Client{}, &mockResizer{})
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, triggerRequest(
+		`{"clientId":"39","images":["foo.jpg"],"formats":["avif"],"sizes":[[-1,0]]}`))
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "non-negative") {
+		t.Errorf("error body should mention non-negative; got %q", w.Body.String())
+	}
+}
+
+func TestWorkerTrigger_VersionInvalid(t *testing.T) {
+	srv := newTriggerServer(t, &mockS3Client{}, &mockResizer{})
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, triggerRequest(
+		`{"clientId":"39","version":"abc","images":["foo.jpg"],"formats":["avif"]}`))
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "version") {
+		t.Errorf("error body should mention version; got %q", w.Body.String())
+	}
+}
+
+func TestWorkerTrigger_VersionDefault(t *testing.T) {
+	var putKey string
+	var mu sync.Mutex
+	s3 := &mockS3Client{
+		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
+			return []byte("o"), "image/jpeg", nil
+		},
+		putFunc: func(ctx context.Context, key string, data []byte, contentType string) error {
+			mu.Lock()
+			defer mu.Unlock()
+			putKey = key
+			return nil
+		},
+	}
+	rz := &mockResizer{resizeFunc: func(data []byte, opts types.ImageOptions) ([]byte, string, error) {
+		return []byte("r"), "image/" + opts.Format, nil
+	}}
+	srv := newTriggerServer(t, s3, rz)
+
+	body := `{"clientId":"39","images":["foo.jpg"],"sizes":[[100,100]],"formats":["avif"]}`
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, triggerRequest(body))
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		done := putKey != ""
+		mu.Unlock()
+		if done {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(putKey, "/3/") {
+		t.Errorf("expected output key to contain default version '/3/'; got %q", putKey)
+	}
+}
+
+func TestWorkerTrigger_VersionExplicit(t *testing.T) {
+	var putKey string
+	var mu sync.Mutex
+	s3 := &mockS3Client{
+		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
+			return []byte("o"), "image/jpeg", nil
+		},
+		putFunc: func(ctx context.Context, key string, data []byte, contentType string) error {
+			mu.Lock()
+			defer mu.Unlock()
+			putKey = key
+			return nil
+		},
+	}
+	rz := &mockResizer{resizeFunc: func(data []byte, opts types.ImageOptions) ([]byte, string, error) {
+		return []byte("r"), "image/" + opts.Format, nil
+	}}
+	srv := newTriggerServer(t, s3, rz)
+
+	body := `{"clientId":"39","version":"2","images":["foo.jpg"],"sizes":[[100,100]],"formats":["avif"]}`
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, triggerRequest(body))
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		done := putKey != ""
+		mu.Unlock()
+		if done {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(putKey, "/2/") {
+		t.Errorf("expected output key to contain explicit version '/2/'; got %q", putKey)
+	}
+}
+
+func TestWorkerTrigger_LegacyPayloadRejected(t *testing.T) {
+	srv := newTriggerServer(t, &mockS3Client{}, &mockResizer{})
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, triggerRequest(
+		`{"key":"catalog/products/images/foo.jpg"}`))
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("legacy payload must return 400; got %d", w.Code)
+	}
+	// The error body should mention one of the new required field names so
+	// migrating callers know what to do.
+	body := w.Body.String()
+	if !strings.Contains(body, "clientId") && !strings.Contains(body, "images") {
+		t.Errorf("error body should name a new required field (clientId/images); got %q", body)
+	}
+}
+
+func TestWorkerTrigger_FireAndForget(t *testing.T) {
+	// Block the worker's Get to keep the goroutine alive across the
+	// handler's return. The 202 must be observed BEFORE Get is unblocked.
+	gate := make(chan struct{})
+	s3 := &mockS3Client{
+		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
+			<-gate
+			return []byte("o"), "image/jpeg", nil
 		},
 		putFunc: func(ctx context.Context, key string, data []byte, contentType string) error {
 			return nil
 		},
 	}
-	resizer := &mockResizer{
-		resizeFunc: func(data []byte, opts types.ImageOptions) ([]byte, string, error) {
-			return []byte("resized-data"), "image/webp", nil
-		},
-	}
-	srv := NewServer(s3, resizer, nil, "")
+	rz := &mockResizer{resizeFunc: func(data []byte, opts types.ImageOptions) ([]byte, string, error) {
+		return []byte("r"), "image/" + opts.Format, nil
+	}}
+	srv := newTriggerServer(t, s3, rz)
 
-	payload := map[string]string{"key": "catalog/products/images/test.jpg"}
-	body, _ := json.Marshal(payload)
-	req := httptest.NewRequest("POST", "/_/worker/trigger", bytes.NewReader(body))
+	body := `{"clientId":"39","images":["foo.jpg"],"sizes":[[100,100]],"formats":["avif"]}`
 	w := httptest.NewRecorder()
-	srv.ServeHTTP(w, req)
+
+	done := make(chan struct{})
+	go func() {
+		srv.ServeHTTP(w, triggerRequest(body))
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Handler returned. Now release the worker goroutine.
+		close(gate)
+	case <-time.After(1 * time.Second):
+		close(gate)
+		t.Fatal("handler did not return — fire-and-forget contract broken")
+	}
 
 	if w.Code != http.StatusAccepted {
-		t.Errorf("Expected status Accepted, got %d", w.Code)
+		t.Errorf("status = %d, want 202", w.Code)
 	}
 }
 
