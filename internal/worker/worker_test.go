@@ -58,10 +58,10 @@ func (m *mockS3Client) PutKeys() []string {
 }
 
 type mockResizer struct {
-	mu          sync.Mutex
-	calls       int
-	failOnCall  int // 1-indexed; 0 disables
-	resizeFunc  func(data []byte, opts types.ImageOptions) ([]byte, string, error)
+	mu         sync.Mutex
+	calls      int
+	failOnCall int // 1-indexed; 0 disables
+	resizeFunc func(data []byte, opts types.ImageOptions) ([]byte, string, error)
 }
 
 func (m *mockResizer) Resize(data []byte, opts types.ImageOptions) ([]byte, string, error) {
