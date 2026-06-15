@@ -97,15 +97,59 @@ Legacy fallback (origin-side migration; unchanged):
 Server:
 - `PORT` — server port. Defaults to `8080`.
 
-Worker (bulk pre-resize):
-- `SIZES` — JSON array of target sizes (e.g. `[[150,210],[240,0]]`). Defaults to a predefined list of 33.
-- `FORMAT` — target format (`webp`, `avif`, `jpg`). Defaults to `avif`.
+Worker (bulk pre-resize defaults):
+- `SIZES` — JSON array of target sizes (e.g. `[[150,210],[240,0]]`). Defaults to a predefined list of 33. Used as the fallback when a trigger payload omits `sizes`.
+- `FORMAT` — historically the env-wide target format. **No longer used by the trigger** — the new payload requires `formats` explicitly. Kept as a field on the worker struct in case future internal callers need a default.
 
 libvips tuning:
 - `VIPS_CONCURRENCY`, `VIPS_MAX_CACHE_MEM`, `VIPS_MAX_CACHE_SIZE`.
 
 Debug:
 - `DEBUG=true` — enables libvips logging.
+
+## Worker trigger
+
+`POST /_/worker/trigger` dispatches a bulk pre-resize batch to a detached
+goroutine and returns `202 Accepted` immediately. The response is observable
+before the batch starts.
+
+Payload:
+
+```json
+{
+  "clientId": "39",
+  "version": "3",
+  "images": ["catalog/products/images/foo.jpg", "catalog/products/images/bar.png"],
+  "sizes": [[200, 0], [400, 0]],
+  "formats": ["avif", "webp"]
+}
+```
+
+Fields:
+
+| Field | Required | Notes |
+|-------|----------|-------|
+| `clientId` | yes | Non-empty string. Becomes the leading segment of every output key (`{clientId}/{version}/images/products/...`). |
+| `images` | yes | Non-empty array of fully-resolved S3 keys to original images. The proxy does no template substitution — resolve `{productUri}/{imageSrc}` upstream. |
+| `formats` | yes | Non-empty array. Each entry must be one of `png`, `jpg`, `jpeg`, `webp`, `avif`. Invalid → 400 naming the offending value. |
+| `sizes` | no | Array of `[width, height]` int pairs. Both values must be ≥ 0. When absent or `null` → fall back to the env `SIZES`. |
+| `version` | no | String. Must parse as a non-negative integer (e.g. `"3"`). Absent / empty string → defaults to `3`. |
+
+Output keys are written under:
+
+```
+{clientId}/{version}/images/products/{width}/{height}/{filename}.{format}
+```
+
+The cartesian product is `len(images) × len(sizes) × len(formats)`. For the example
+above (1 image × 2 sizes × 2 formats) the batch produces 4 thumbnails.
+
+Each output respects the storage topology configured via `CACHE_MODE` — in `shadow` or
+`live` mode, every output is dual-written to both origin and cache, with per-side failures
+logged independently.
+
+The legacy `{"key": "..."}` payload is no longer accepted; callers must migrate to the
+envelope before the new build ships, or they will receive 400.
 
 Deprecated:
 - `IMAGE_TAGS` — used to set S3 object tags. **Deprecated** as of the split-bucket
