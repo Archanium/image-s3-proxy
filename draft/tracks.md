@@ -17,15 +17,16 @@ synced_to_commit: "21fdfb3c6f1fc77bc3f10c54bd56e804e5ff0d86"
 # Tracks
 
 ## Active
-
-### extend-worker-payload - Multi-image / multi-format worker trigger envelope
-- **Status:** [~] In Progress
-- **Created:** 2026-06-16
-- **Phases:** 0/2
-- **Tasks:** 0/13
-- **Path:** `./tracks/extend-worker-payload/`
+<!-- No active tracks -->
 
 ## Completed
+
+### extend-worker-payload - Multi-image / multi-format worker trigger envelope
+- **Status:** [x] Completed 2026-06-16
+- **Phases:** 2/2
+- **Tasks:** 13/13
+- **PR:** https://github.com/Archanium/image-s3-proxy/pull/4
+- **Path:** `./tracks/extend-worker-payload/`
 
 ### split-origin-and-cache-buckets - Split origin/cache buckets + canary mode (off/shadow/live)
 - **Status:** [x] Completed 2026-06-14

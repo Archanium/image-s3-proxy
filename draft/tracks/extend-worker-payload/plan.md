@@ -75,7 +75,7 @@ runs after.
 - [x] **Task 2.5:** `make test` (Alpine) — 5/5 packages green.
 - [x] **Task 2.6:** Docker smoke confirmed: happy-path → 202; legacy `{"key":"..."}` → 400 "clientId is required"; invalid `["bogus"]` format → 400 with the value named. Worker stderr shows `Worker: batch start — clientId=39 version=3 images=1 sizes=1 formats=2 (total outputs=2)` and per-image Get-failure isolation (403 from fake AWS creds was logged and skipped, batch did not crash).
 - [x] **Task 2.7:** README "Worker trigger" section + env-var notes updated. (71a30ef)
-- [ ] **Task 2.8:** Push + PR.
+- [x] **Task 2.8:** Pushed `extend-worker-payload`; opened PR #4 — https://github.com/Archanium/image-s3-proxy/pull/4
 
 **Verification gate:**
 - `make test` passes (Alpine).
