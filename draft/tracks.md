@@ -17,7 +17,13 @@ synced_to_commit: "21fdfb3c6f1fc77bc3f10c54bd56e804e5ff0d86"
 # Tracks
 
 ## Active
-<!-- No active tracks -->
+
+### extend-worker-payload - Multi-image / multi-format worker trigger envelope
+- **Status:** [~] In Progress
+- **Created:** 2026-06-16
+- **Phases:** 0/2
+- **Tasks:** 0/13
+- **Path:** `./tracks/extend-worker-payload/`
 
 ## Completed
 

@@ -1,0 +1,16 @@
+{
+  "id": "extend-worker-payload",
+  "title": "Multi-image / multi-format worker trigger envelope",
+  "type": "feature",
+  "status": "planning",
+  "created": "2026-06-16T01:00:00Z",
+  "updated": "2026-06-16T01:00:00Z",
+  "phases": {
+    "total": 2,
+    "completed": 0
+  },
+  "tasks": {
+    "total": 13,
+    "completed": 0
+  }
+}
