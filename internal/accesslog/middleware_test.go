@@ -273,6 +273,91 @@ func TestMiddleware_CloudflareIPField(t *testing.T) {
 	}
 }
 
+// --- timings field (track add-timings-to-access-log) ---
+
+func TestMiddleware_TimingsPopulatedFromContext(t *testing.T) {
+	_, buf, mw := newMiddlewareTest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tm := TimingsFromContext(r.Context())
+		tm.Record("s3-get", 12*time.Millisecond)
+		tm.Record("resize", 7*time.Millisecond)
+		_, _ = w.Write([]byte("ok"))
+	}), "bucket")
+
+	mw.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/k.jpg", nil))
+
+	e := parseLastEntry(t, buf)
+	if got, want := e.Timings["s3-get"], 0.012; got != want {
+		t.Errorf("timings.s3-get = %v, want %v", got, want)
+	}
+	if got, want := e.Timings["resize"], 0.007; got != want {
+		t.Errorf("timings.resize = %v, want %v", got, want)
+	}
+	if len(e.Timings) != 2 {
+		t.Errorf("expected exactly 2 timing entries; got %d: %v", len(e.Timings), e.Timings)
+	}
+}
+
+func TestMiddleware_TimingsEmptyWhenNoPhases(t *testing.T) {
+	_, buf, mw := newMiddlewareTest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), "bucket")
+
+	mw.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/k.jpg", nil))
+
+	if !bytes.Contains(buf.Bytes(), []byte(`"timings":{}`)) {
+		t.Errorf("expected '\"timings\":{}' in emitted line; got:\n%s", buf.String())
+	}
+
+	e := parseLastEntry(t, buf)
+	if e.Timings == nil {
+		t.Errorf("timings must be non-nil; got nil")
+	}
+	if len(e.Timings) != 0 {
+		t.Errorf("timings must be empty when no phases ran; got %v", e.Timings)
+	}
+}
+
+func TestMiddleware_TimingsSumEqualsUpstreamResponseTime(t *testing.T) {
+	_, buf, mw := newMiddlewareTest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tm := TimingsFromContext(r.Context())
+		tm.Record("s3-get", 25*time.Millisecond)
+		tm.Record("resize", 50*time.Millisecond)
+		tm.Record("s3-put", 25*time.Millisecond)
+		_, _ = w.Write([]byte("ok"))
+	}), "bucket")
+
+	mw.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/k.jpg", nil))
+
+	e := parseLastEntry(t, buf)
+	var sum float64
+	for _, v := range e.Timings {
+		sum += v
+	}
+	const epsilon = 1e-9
+	diff := e.Upstream.ResponseTime - sum
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff > epsilon {
+		t.Errorf("upstream.responseTime (%v) != sum(timings) (%v); diff = %v", e.Upstream.ResponseTime, sum, diff)
+	}
+}
+
+func TestMiddleware_TimingsRespectsRound3(t *testing.T) {
+	// 1234567 ns = 0.001234567 s → round3 = 0.001 s
+	_, buf, mw := newMiddlewareTest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		TimingsFromContext(r.Context()).Record("s3-get", 1234567*time.Nanosecond)
+		w.WriteHeader(http.StatusOK)
+	}), "bucket")
+
+	mw.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/k.jpg", nil))
+
+	e := parseLastEntry(t, buf)
+	if got, want := e.Timings["s3-get"], 0.001; got != want {
+		t.Errorf("timings.s3-get = %v, want %v (round3 of 0.001234567 s)", got, want)
+	}
+}
+
 // --- one log line per request ---
 
 func TestMiddleware_ExactlyOneLogLinePerRequest(t *testing.T) {
