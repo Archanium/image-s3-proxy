@@ -52,7 +52,7 @@ The `*Timings` accumulator already exists and already has `Phases() map[string]t
 - [x] **Task 1.7:** `make test` (Alpine) — all 5 packages pass; no regressions on existing 60+ tests.
 - [x] **Task 1.8:** Docker smoke verified: `docker logs | jq '.timings'` shows `{"s3-get": 0.455}` on a request that ran one phase; `{}` on the worker-trigger path (no phases). `upstream.responseTime == sum(timings.values())` holds (0.455 == 0.455 in the smoke).
 - [x] **Task 1.9:** README "Access log shape" section added; Features bullet updated. (48cbc9e)
-- [ ] **Task 1.10:** Push + PR.
+- [x] **Task 1.10:** Pushed `add-timings-to-access-log`; opened PR #3 — https://github.com/Archanium/image-s3-proxy/pull/3
 
 **Verification gate:**
 - All existing tests pass under Alpine Docker.

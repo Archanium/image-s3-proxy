@@ -2,15 +2,17 @@
   "id": "add-timings-to-access-log",
   "title": "Include phase timings in the JSON access log",
   "type": "feature",
-  "status": "in_progress",
+  "status": "completed",
   "created": "2026-06-16T00:00:00Z",
-  "updated": "2026-06-16T00:30:00Z",
+  "updated": "2026-06-16T00:35:00Z",
+  "completed": "2026-06-16T00:35:00Z",
   "phases": {
     "total": 1,
-    "completed": 0
+    "completed": 1
   },
   "tasks": {
     "total": 10,
-    "completed": 9
-  }
+    "completed": 10
+  },
+  "pr_url": "https://github.com/Archanium/image-s3-proxy/pull/3"
 }
