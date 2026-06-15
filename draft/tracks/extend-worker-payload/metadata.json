@@ -1,0 +1,18 @@
+{
+  "id": "extend-worker-payload",
+  "title": "Multi-image / multi-format worker trigger envelope",
+  "type": "feature",
+  "status": "completed",
+  "created": "2026-06-16T01:00:00Z",
+  "updated": "2026-06-16T01:35:00Z",
+  "completed": "2026-06-16T01:35:00Z",
+  "phases": {
+    "total": 2,
+    "completed": 2
+  },
+  "tasks": {
+    "total": 13,
+    "completed": 13
+  },
+  "pr_url": "https://github.com/Archanium/image-s3-proxy/pull/4"
+}

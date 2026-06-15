@@ -21,6 +21,13 @@ synced_to_commit: "21fdfb3c6f1fc77bc3f10c54bd56e804e5ff0d86"
 
 ## Completed
 
+### extend-worker-payload - Multi-image / multi-format worker trigger envelope
+- **Status:** [x] Completed 2026-06-16
+- **Phases:** 2/2
+- **Tasks:** 13/13
+- **PR:** https://github.com/Archanium/image-s3-proxy/pull/4
+- **Path:** `./tracks/extend-worker-payload/`
+
 ### add-timings-to-access-log - Include phase timings in the JSON access log
 - **Status:** [x] Completed 2026-06-16
 - **Phases:** 1/1

@@ -440,24 +440,96 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, key string, 
 	w.Write(data)
 }
 
+// allowedFormats is the set of output formats the resizer supports. Any
+// value outside this set in a trigger payload's "formats" array is a
+// validation error.
+var allowedFormats = map[string]bool{
+	"png":  true,
+	"jpg":  true,
+	"jpeg": true,
+	"webp": true,
+	"avif": true,
+}
+
+// triggerPayload is the JSON envelope accepted by POST /_/worker/trigger.
+// All five fields are documented in the spec; clientId / images / formats
+// are required, sizes / version are optional.
+type triggerPayload struct {
+	ClientID string   `json:"clientId"`
+	Version  string   `json:"version"`
+	Images   []string `json:"images"`
+	Sizes    [][]int  `json:"sizes"`
+	Formats  []string `json:"formats"`
+}
+
 func (s *Server) handleWorkerTrigger(w http.ResponseWriter, r *http.Request) {
-	var payload struct {
-		Key string `json:"key"`
-	}
+	var payload triggerPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		s.httpError(w, "Invalid request body", http.StatusBadRequest)
+		s.httpError(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	if payload.Key == "" {
-		s.httpError(w, "Missing key in payload", http.StatusBadRequest)
+	// Required fields.
+	if payload.ClientID == "" {
+		s.httpError(w, "clientId is required", http.StatusBadRequest)
 		return
+	}
+	if len(payload.Images) == 0 {
+		s.httpError(w, "images must be a non-empty array", http.StatusBadRequest)
+		return
+	}
+	if len(payload.Formats) == 0 {
+		s.httpError(w, "formats must be a non-empty array", http.StatusBadRequest)
+		return
+	}
+	for _, f := range payload.Formats {
+		if !allowedFormats[strings.ToLower(f)] {
+			s.httpError(w, "invalid format "+strconv.Quote(f)+
+				" (allowed: png, jpg, jpeg, webp, avif)", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Optional fields with structural validation.
+	for i, row := range payload.Sizes {
+		if len(row) != 2 {
+			s.httpError(w, "sizes["+strconv.Itoa(i)+
+				"] must have exactly two integers [width, height]",
+				http.StatusBadRequest)
+			return
+		}
+		if row[0] < 0 || row[1] < 0 {
+			s.httpError(w, "sizes["+strconv.Itoa(i)+
+				"] must contain non-negative integers",
+				http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Version: defaults to 3 when absent or empty; non-numeric → 400.
+	version := 3
+	if payload.Version != "" {
+		v, err := strconv.Atoi(payload.Version)
+		if err != nil || v < 0 {
+			s.httpError(w, "version must be a non-negative integer string (e.g. \"3\")",
+				http.StatusBadRequest)
+			return
+		}
+		version = v
+	}
+
+	req := worker.BatchRequest{
+		ClientID: payload.ClientID,
+		Version:  version,
+		Images:   payload.Images,
+		Sizes:    payload.Sizes,
+		Formats:  payload.Formats,
 	}
 
 	go func() {
 		ctx := context.Background()
-		if err := s.worker.ProcessS3Event(ctx, "", payload.Key); err != nil {
-			log.Printf("Worker processing error for key %s: %v", payload.Key, err)
+		if err := s.worker.ProcessBatch(ctx, req); err != nil {
+			log.Printf("Worker processing error for batch clientId=%s: %v", req.ClientID, err)
 		}
 	}()
 
