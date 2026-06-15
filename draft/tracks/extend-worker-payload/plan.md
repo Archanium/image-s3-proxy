@@ -49,31 +49,11 @@ runs after.
 
 #### Tasks
 
-- [ ] **Task 1.1:** Define `BatchRequest` struct in `internal/worker/worker.go`:
-  - `ClientID string`, `Version int`, `Images []string`, `Sizes [][]int`, `Formats []string`.
-  - Document in a comment that `Sizes == nil || len(Sizes) == 0` means "fall back to the worker's env-configured sizes", and that `Formats` is a precondition (validated upstream).
-- [ ] **Task 1.2:** Implement `(w *Worker) ProcessBatch(ctx context.Context, req BatchRequest) error`:
-  - Effective sizes: `req.Sizes` if non-empty, else `w.sizes`.
-  - Loop: for each image, fetch the original from `w.s3Client` once. If Get fails, log + skip image (per-image isolation, like today's per-size resize-error isolation).
-  - Nested loops: per (image data, width, height, format) tuple, build `opts := types.ImageOptions{Width, Height, Version: req.Version, Format: format, Fit: "contain", IsAnimated: true}`, call `w.resizer.Resize(data, opts)`. Continue on per-output error.
-  - Output key: `fmt.Sprintf("%s/%d/images/products/%d/%d/%s.%s", req.ClientID, req.Version, width, height, origFilename, format)`.
-  - Reuse the existing skip-existing-cache check + dual-write logic from today's `ProcessProductImage` body verbatim (lines 78-106 of worker.go) but with `req.ClientID` / `req.Version` / `format` parameterized.
-  - Return nil unconditionally — per-output failures are logged but never escalate to a batch error.
-- [ ] **Task 1.3:** Remove `Worker.ProcessProductImage` and `Worker.ProcessS3Event` from `internal/worker/worker.go`. Also remove the now-unused `strings` import (was used by `ProcessS3Event` for the key routing).
-- [ ] **Task 1.4:** Rewrite `internal/worker/worker_test.go` (the existing `TestProcessProductImage_*` suite is now obsolete):
-  - Drop the in-package `mockResizer` (existing) but keep `mockS3Client`. Keep the `TestMain` log-silencing.
-  - `TestProcessBatch_HappyPath_SingleImage_SingleSize_SingleFormat` — counts: 1 Get on origin, 1 Resize, 1 Put.
-  - `TestProcessBatch_MultiImage` — 2 images × 1 size × 1 format → 2 Gets, 2 Resizes, 2 Puts. Assert output keys contain both image basenames.
-  - `TestProcessBatch_MultiSize` — 1 image × 3 sizes × 1 format → 1 Get, 3 Resizes, 3 Puts.
-  - `TestProcessBatch_MultiFormat` — 1 image × 1 size × 2 formats → 1 Get, 2 Resizes, 2 Puts. Output keys end in `.avif` and `.webp` (or whichever pair the test uses).
-  - `TestProcessBatch_FullCartesian` — 2 images × 2 sizes × 2 formats → 2 Gets, 8 Resizes, 8 Puts. Output count = `len(images) × len(sizes) × len(formats)`.
-  - `TestProcessBatch_SizesNil_UsesEnvDefaults` — `BatchRequest.Sizes` left empty; assert the worker's `w.sizes` (passed via `NewWorker`) drives output count.
-  - `TestProcessBatch_ClientIDInOutputKey` — `ClientID = "39"`; assert every Put key starts with `39/`. Also assert no key starts with `13/` (regression guard against the old hardcode).
-  - `TestProcessBatch_DualWritesWhenClientsDiffer` — distinct origin + cache mocks; assert both `putFunc`s called the expected number of times.
-  - `TestProcessBatch_SkipExistingTargetsCache` — origin mock's `existsFunc` t.Errorf's if called; cache mock's returns `(true, nil)` → assert no Puts at all.
-  - `TestProcessBatch_PerOutputResizeFailure_DoesNotAbortBatch` — resizer returns error for the 2nd size; assert sizes 1, 3, 4, ... all still Put. Output count = `total - 1`.
-  - `TestProcessBatch_PerImageGetFailure_SkipsImageContinuesBatch` — origin `getFunc` returns error for image 2; assert image 1's outputs and image 3's outputs still appear, image 2's don't.
-- [ ] **Task 1.5:** Run `go test -race -v ./internal/worker/...` — all new tests pass.
+- [x] **Task 1.1:** `BatchRequest{ClientID, Version, Images, Sizes, Formats}` defined in `internal/worker/worker.go`. (de1ce7e)
+- [x] **Task 1.2:** `(w *Worker).ProcessBatch` implemented. Uses unexported `processOutput` helper for the per-(image, size, format) leaf. Effective sizes default to `w.sizes` when `req.Sizes` is empty/nil. (de1ce7e)
+- [x] **Task 1.3:** `Worker.ProcessProductImage` and `Worker.ProcessS3Event` removed; unused `strings` import dropped. (de1ce7e)
+- [x] **Task 1.4:** `internal/worker/worker_test.go` rewritten — 11 tests cover all the spec'd cases including the `13/`-prefix regression guard. (de1ce7e)
+- [x] **Task 1.5:** `go test -race -v ./internal/worker/...` — 11/11 pass.
 
 **Verification gate:**
 - 10+ new tests pass with `-race`.
@@ -88,36 +68,14 @@ runs after.
 
 #### Tasks
 
-- [ ] **Task 2.1:** In `internal/server/server.go`, rewrite `handleWorkerTrigger`:
-  - Replace the existing `payload struct { Key string }` with `triggerPayload` carrying `ClientID`, `Version`, `Images`, `Sizes`, `Formats` (all JSON-tagged).
-  - On `json.NewDecoder(r.Body).Decode(&payload)` failure → 400 with body `"Invalid request body"` (matches existing tone).
-  - Validate in order; return 400 with a descriptive body on the first failure:
-    - `clientId` non-empty.
-    - `images` non-empty.
-    - `formats` non-empty; every entry ∈ `{png, jpg, jpeg, webp, avif}` (a map literal at file scope works).
-    - `sizes` (when present): every row has length 2 and both values ≥ 0.
-    - `version` (when present and non-empty): parses via `strconv.Atoi` ≥ 0. Absent / empty → default `version = 3`.
-  - Build `worker.BatchRequest{...}` and dispatch: `go func() { ctx := context.Background(); if err := s.worker.ProcessBatch(ctx, req); err != nil { log.Printf(...) } }()`.
-  - Reply with `w.WriteHeader(http.StatusAccepted)` + `w.Write([]byte("Accepted"))`. Same as today.
-- [ ] **Task 2.2:** Define `allowedFormats` at package scope in `server.go` as `map[string]bool{"png": true, "jpg": true, "jpeg": true, "webp": true, "avif": true}` so the validator is a constant-time lookup.
-- [ ] **Task 2.3:** Replace `internal/server/server_test.go`'s `TestWorkerTrigger` with a tighter suite:
-  - `TestWorkerTrigger_HappyPath` — full envelope, asserts 202 + the worker's `ProcessBatch` is reached (mock the worker via a function-pointer struct OR assert via a sentinel mockS3Client that records Puts).
-  - `TestWorkerTrigger_MissingClientID` → 400.
-  - `TestWorkerTrigger_MissingImages` → 400.
-  - `TestWorkerTrigger_MissingFormats` → 400.
-  - `TestWorkerTrigger_InvalidFormat` (e.g. `["tiff"]`) → 400.
-  - `TestWorkerTrigger_InvalidSizesRow` (e.g. `[[200]]`) → 400.
-  - `TestWorkerTrigger_NegativeSize` (e.g. `[[-1, 0]]`) → 400.
-  - `TestWorkerTrigger_VersionInvalid` (e.g. `"abc"`) → 400.
-  - `TestWorkerTrigger_VersionDefault` — `version` absent; check output keys contain `/3/`.
-  - `TestWorkerTrigger_VersionExplicit` — `version: "2"`; check output keys contain `/2/`.
-  - `TestWorkerTrigger_LegacyPayloadRejected` — `{"key":"foo"}` → 400.
-  - `TestWorkerTrigger_FireAndForget` — handler returns before ProcessBatch finishes. Block ProcessBatch via a channel; verify the HTTP response was already 202 before unblocking.
-- [ ] **Task 2.4:** Run `go vet ./...` and `gofmt -l ./...`. Both clean.
-- [ ] **Task 2.5:** Run `make test` (Alpine). All 5 packages green.
-- [ ] **Task 2.6:** Docker smoke. Build image. Run with fake AWS creds. POST the example payload from the spec; verify 202 + the JSON access log line shows `status=202`. POST the legacy `{"key":"foo"}`; verify 400. POST `{"clientId":"39","images":["foo.jpg"],"formats":["bogus"]}`; verify 400 with a body naming the invalid format.
-- [ ] **Task 2.7:** Update `README.md` — add a "Worker trigger" subsection documenting the new payload (clientId required, images required, formats required, sizes optional with env default, version optional with default 3). Mention that the legacy `{"key": "..."}` shape is no longer accepted.
-- [ ] **Task 2.8:** Commit Phase-1 changes as one commit (`feat: add Worker.ProcessBatch with multi-image / multi-format envelope`), Phase-2 changes as another (`feat: rewrite /_/worker/trigger to use ProcessBatch envelope`). Push branch. Open PR titled `feat: extend worker trigger to multi-image / multi-format batches`.
+- [x] **Task 2.1:** `handleWorkerTrigger` rewritten with the new `triggerPayload` envelope and full validation chain. (0feea1f)
+- [x] **Task 2.2:** `allowedFormats` at package scope, validates `{png, jpg, jpeg, webp, avif}` with a constant-time lookup. (0feea1f)
+- [x] **Task 2.3:** `internal/server/server_test.go` — replaced `TestWorkerTrigger` with 12 new cases. (0feea1f)
+- [x] **Task 2.4:** `gofmt -l ./...` and `go vet ./internal/...` both clean (drive-by gofmt on `worker_test.go`).
+- [x] **Task 2.5:** `make test` (Alpine) — 5/5 packages green.
+- [x] **Task 2.6:** Docker smoke confirmed: happy-path → 202; legacy `{"key":"..."}` → 400 "clientId is required"; invalid `["bogus"]` format → 400 with the value named. Worker stderr shows `Worker: batch start — clientId=39 version=3 images=1 sizes=1 formats=2 (total outputs=2)` and per-image Get-failure isolation (403 from fake AWS creds was logged and skipped, batch did not crash).
+- [x] **Task 2.7:** README "Worker trigger" section + env-var notes updated. (71a30ef)
+- [ ] **Task 2.8:** Push + PR.
 
 **Verification gate:**
 - `make test` passes (Alpine).
