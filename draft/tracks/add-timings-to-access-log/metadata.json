@@ -2,15 +2,15 @@
   "id": "add-timings-to-access-log",
   "title": "Include phase timings in the JSON access log",
   "type": "feature",
-  "status": "planning",
+  "status": "in_progress",
   "created": "2026-06-16T00:00:00Z",
-  "updated": "2026-06-16T00:00:00Z",
+  "updated": "2026-06-16T00:30:00Z",
   "phases": {
     "total": 1,
     "completed": 0
   },
   "tasks": {
     "total": 10,
-    "completed": 0
+    "completed": 9
   }
 }
