@@ -1186,6 +1186,113 @@ func TestServeHTTP_ServerTiming_LiveMode_PhasesSplit(t *testing.T) {
 	}
 }
 
+// --- access-log timings integration (track add-timings-to-access-log) ---
+
+// newMiddlewareCapturing wraps srv with accesslog.Middleware and captures
+// the emitted JSON log line into buf, instead of discarding it.
+func newMiddlewareCapturing(srv *Server, buf *bytes.Buffer) http.Handler {
+	return accesslog.Middleware(srv, accesslog.NewLogger(buf), "test-bucket")
+}
+
+func parseTimingsFromLog(t *testing.T, line []byte) map[string]float64 {
+	t.Helper()
+	var entry struct {
+		Timings map[string]float64 `json:"timings"`
+	}
+	if err := json.Unmarshal(line, &entry); err != nil {
+		t.Fatalf("parse log line as JSON: %v\nline: %s", err, line)
+	}
+	if entry.Timings == nil {
+		t.Fatalf("timings must be non-nil in emitted line; got null. line: %s", line)
+	}
+	return entry.Timings
+}
+
+func TestServeHTTP_AccessLog_OffMode_TimingsContents(t *testing.T) {
+	// Off-mode resize miss: expect timings to contain s3-get + resize + s3-put
+	// (bare s3-put, matching off-mode Server-Timing phase semantics).
+	s3 := &mockS3Client{
+		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
+			if key == "123/catalog/products/images/test-image.jpg" {
+				return []byte("original"), "image/jpeg", nil
+			}
+			return nil, "", &s3types.NoSuchKey{}
+		},
+		putFunc: func(ctx context.Context, key string, data []byte, contentType string) error { return nil },
+	}
+	resizer := &mockResizer{
+		resizeFunc: func(data []byte, opts types.ImageOptions) ([]byte, string, error) {
+			return []byte("resized"), "image/webp", nil
+		},
+	}
+	var logBuf bytes.Buffer
+	handler := newMiddlewareCapturing(NewServer(s3, resizer, nil, ""), &logBuf)
+
+	req := httptest.NewRequest("GET", "/123/2/images/products/100/100/test-image.jpg.webp", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	timings := parseTimingsFromLog(t, bytes.TrimRight(logBuf.Bytes(), "\n"))
+	for _, phase := range []string{"s3-get", "resize", "s3-put"} {
+		if _, ok := timings[phase]; !ok {
+			t.Errorf("timings missing %q on off-mode resize miss; got %v", phase, timings)
+		}
+	}
+	for _, unwanted := range []string{"s3-exists", "s3-put-cache", "s3-put-origin"} {
+		if _, ok := timings[unwanted]; ok {
+			t.Errorf("timings unexpectedly contained %q in off mode; got %v", unwanted, timings)
+		}
+	}
+}
+
+func TestServeHTTP_AccessLog_ShadowMode_TimingsContents(t *testing.T) {
+	// Shadow-mode resize miss: dual-write splits s3-put into s3-put-cache
+	// + s3-put-origin. Bare "s3-put" must NOT appear.
+	origin := &mockS3Client{
+		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
+			if key == "123/catalog/products/images/test-image.jpg" {
+				return []byte("original"), "image/jpeg", nil
+			}
+			return nil, "", &s3types.NoSuchKey{}
+		},
+		putFunc: func(ctx context.Context, key string, data []byte, contentType string) error { return nil },
+	}
+	cache := &mockS3Client{
+		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
+			return nil, "", &s3types.NoSuchKey{}
+		},
+		putFunc: func(ctx context.Context, key string, data []byte, contentType string) error { return nil },
+	}
+	resizer := &mockResizer{
+		resizeFunc: func(data []byte, opts types.ImageOptions) ([]byte, string, error) {
+			return []byte("resized"), "image/webp", nil
+		},
+	}
+	var logBuf bytes.Buffer
+	srv := NewServerWithMode(origin, cache, CacheModeShadow, resizer, nil, "")
+	handler := newMiddlewareCapturing(srv, &logBuf)
+
+	req := httptest.NewRequest("GET", "/123/2/images/products/100/100/test-image.jpg.webp", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	timings := parseTimingsFromLog(t, bytes.TrimRight(logBuf.Bytes(), "\n"))
+	for _, phase := range []string{"s3-get", "resize", "s3-put-cache", "s3-put-origin"} {
+		if _, ok := timings[phase]; !ok {
+			t.Errorf("timings missing %q on shadow-mode resize miss; got %v", phase, timings)
+		}
+	}
+	if _, ok := timings["s3-put"]; ok {
+		t.Errorf("timings must not contain bare 's3-put' in shadow mode; got %v", timings)
+	}
+}
+
 // --- helpers -----------------------------------------------------------
 
 func contains(haystack []string, needle string) bool {

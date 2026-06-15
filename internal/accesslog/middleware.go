@@ -31,6 +31,18 @@ func Middleware(next http.Handler, logger *Logger, upstreamHost string) http.Han
 		rr := newResponseRecorder(w, t)
 		next.ServeHTTP(rr, r.WithContext(ctx))
 
+		// Per-phase timings snapshot for the log line. Same source-of-truth
+		// as upstream.responseTime (which is the sum) and the Server-Timing
+		// response header. Always a non-nil map so the JSON entry always
+		// includes a "timings" key — even on requests where no phases ran
+		// (e.g. POST /_/worker/trigger, which dispatches to a detached
+		// goroutine after returning 202).
+		phaseSnapshot := t.Phases()
+		timings := make(map[string]float64, len(phaseSnapshot))
+		for name, d := range phaseSnapshot {
+			timings[name] = round3(d.Seconds())
+		}
+
 		entry := &Entry{
 			Timestamp: FormatTimestamp(start),
 			Extra:     EntryExtra{CorrelationID: correlationID},
@@ -62,6 +74,7 @@ func Middleware(next http.Handler, logger *Logger, upstreamHost string) http.Han
 				Version:      "",
 				Preloading:   "",
 			},
+			Timings: timings,
 		}
 		logger.Emit(entry)
 	})
