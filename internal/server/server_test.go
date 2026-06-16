@@ -433,6 +433,183 @@ func TestWorkerTrigger_FireAndForget(t *testing.T) {
 	}
 }
 
+// --- worker trigger auth (track add-worker-trigger-auth) ---------------
+
+// happyTriggerServer builds a Server with mocks that record Puts so tests
+// can assert that ProcessBatch was (or was not) invoked.
+func happyTriggerServer(t *testing.T) (*Server, *int32) {
+	t.Helper()
+	var putCount int32
+	s3 := &mockS3Client{
+		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
+			return []byte("o"), "image/jpeg", nil
+		},
+		putFunc: func(ctx context.Context, key string, data []byte, contentType string) error {
+			atomic.AddInt32(&putCount, 1)
+			return nil
+		},
+	}
+	rz := &mockResizer{resizeFunc: func(data []byte, opts types.ImageOptions) ([]byte, string, error) {
+		return []byte("r"), "image/" + opts.Format, nil
+	}}
+	return NewServer(s3, rz, nil, ""), &putCount
+}
+
+const happyBody = `{"clientId":"39","images":["foo.jpg"],"sizes":[[100,100]],"formats":["avif"]}`
+
+func TestWorkerTrigger_Auth_DisabledByDefault_NoHeader(t *testing.T) {
+	// Backwards-compat: no token set, no Authorization header → 202.
+	srv, _ := happyTriggerServer(t)
+
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, triggerRequest(happyBody))
+
+	if w.Code != http.StatusAccepted {
+		t.Errorf("status = %d, want 202 (auth disabled, no header)", w.Code)
+	}
+	if w.Header().Get("WWW-Authenticate") != "" {
+		t.Errorf("WWW-Authenticate header must not leak when auth disabled; got %q", w.Header().Get("WWW-Authenticate"))
+	}
+}
+
+func TestWorkerTrigger_Auth_DisabledByDefault_GarbageHeader(t *testing.T) {
+	// Backwards-compat: no token set, request still 202 even with a
+	// garbage Authorization header (header is ignored).
+	srv, _ := happyTriggerServer(t)
+
+	req := triggerRequest(happyBody)
+	req.Header.Set("Authorization", "Bearer garbage")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Errorf("status = %d, want 202 (auth disabled, header ignored)", w.Code)
+	}
+}
+
+func TestWorkerTrigger_Auth_Enabled_CorrectBearer_Accepted(t *testing.T) {
+	srv, _ := happyTriggerServer(t)
+	srv.SetWorkerAuthToken("letmein")
+
+	req := triggerRequest(happyBody)
+	req.Header.Set("Authorization", "Bearer letmein")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Errorf("status = %d, want 202 (correct token)", w.Code)
+	}
+}
+
+func TestWorkerTrigger_Auth_Enabled_SchemeCaseInsensitive(t *testing.T) {
+	// RFC 6750: the "Bearer" scheme is case-insensitive.
+	srv, _ := happyTriggerServer(t)
+	srv.SetWorkerAuthToken("letmein")
+
+	for _, scheme := range []string{"Bearer", "bearer", "BEARER", "BeArEr"} {
+		req := triggerRequest(happyBody)
+		req.Header.Set("Authorization", scheme+" letmein")
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, req)
+		if w.Code != http.StatusAccepted {
+			t.Errorf("scheme %q: status = %d, want 202", scheme, w.Code)
+		}
+	}
+}
+
+func TestWorkerTrigger_Auth_Enabled_MissingHeader_401(t *testing.T) {
+	// Critical assertion: the detached goroutine must NOT have spawned
+	// when auth fails. We use a gated mock — if ProcessBatch had spawned,
+	// it would have called Get which is gated indefinitely.
+	gate := make(chan struct{})
+	defer close(gate)
+	s3 := &mockS3Client{
+		getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
+			<-gate
+			t.Errorf("worker goroutine MUST NOT spawn when auth fails")
+			return nil, "", errors.New("should not be reached")
+		},
+	}
+	rz := &mockResizer{}
+	srv := NewServer(s3, rz, nil, "")
+	srv.SetWorkerAuthToken("letmein")
+
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, triggerRequest(happyBody))
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", w.Code)
+	}
+	if got := w.Header().Get("WWW-Authenticate"); got != `Bearer realm="worker-trigger"` {
+		t.Errorf("WWW-Authenticate = %q, want %q", got, `Bearer realm="worker-trigger"`)
+	}
+	if !strings.Contains(w.Body.String(), "Unauthorized") {
+		t.Errorf("body = %q, want 'Unauthorized'", w.Body.String())
+	}
+	// Brief sleep to surface any racing-goroutine error from t.Errorf above.
+	time.Sleep(10 * time.Millisecond)
+}
+
+func TestWorkerTrigger_Auth_Enabled_WrongScheme_401(t *testing.T) {
+	srv, _ := happyTriggerServer(t)
+	srv.SetWorkerAuthToken("letmein")
+
+	for _, h := range []string{"Basic letmein", "Token letmein", "letmein", "Bear letmein"} {
+		req := triggerRequest(happyBody)
+		req.Header.Set("Authorization", h)
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("Authorization=%q: status = %d, want 401", h, w.Code)
+		}
+	}
+}
+
+func TestWorkerTrigger_Auth_Enabled_EmptyBearer_401(t *testing.T) {
+	srv, _ := happyTriggerServer(t)
+	srv.SetWorkerAuthToken("letmein")
+
+	req := triggerRequest(happyBody)
+	req.Header.Set("Authorization", "Bearer ")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 (empty Bearer token)", w.Code)
+	}
+}
+
+func TestWorkerTrigger_Auth_Enabled_WrongToken_401(t *testing.T) {
+	srv, _ := happyTriggerServer(t)
+	srv.SetWorkerAuthToken("letmein")
+
+	req := triggerRequest(happyBody)
+	req.Header.Set("Authorization", "Bearer wrong-secret")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 (wrong token)", w.Code)
+	}
+}
+
+func TestWorkerTrigger_Auth_Enabled_GET_Read_PathUnaffected(t *testing.T) {
+	// GET reads on the proxy path should NOT require the worker auth
+	// token. Only POST /_/worker/trigger does.
+	srv, _ := happyTriggerServer(t)
+	srv.SetWorkerAuthToken("letmein")
+
+	// A non-existent key on a single-client setup; with the mock returning
+	// data we expect 200 (not 401).
+	req := httptest.NewRequest("GET", "/cached.jpg", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code == http.StatusUnauthorized {
+		t.Errorf("GET read path must not require worker auth; got 401")
+	}
+}
+
 // --- regex + URL mapping ----------------------------------------------
 
 func TestRegexMatching(t *testing.T) {

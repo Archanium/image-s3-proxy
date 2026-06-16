@@ -132,6 +132,17 @@ func main() {
 
 	srv := server.NewServerWithMode(originClient, cacheClient, mode, imgResizer, sizes, format)
 
+	// Optional bearer-token auth on POST /_/worker/trigger. When the env
+	// var is unset or empty, the trigger endpoint stays unauthenticated
+	// (today's behavior). When set, every trigger request must carry
+	// `Authorization: Bearer <token>` matching this value.
+	if workerToken := os.Getenv("WORKER_AUTH_TOKEN"); workerToken != "" {
+		srv.SetWorkerAuthToken(workerToken)
+		log.Printf("worker-trigger auth: ENABLED")
+	} else {
+		log.Printf("worker-trigger auth: DISABLED (set WORKER_AUTH_TOKEN to enable)")
+	}
+
 	// upstreamHost is logged on every access line. In split mode the
 	// dominant write traffic lands on the cache bucket; report the cache
 	// endpoint/bucket when configured. In single-client mode fall back

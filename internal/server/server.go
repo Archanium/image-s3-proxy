@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -81,6 +82,28 @@ type Server struct {
 	resizer      types.Resizer
 	worker       *worker.Worker
 	mode         CacheMode
+
+	// workerAuthToken is the expected bearer token for
+	// POST /_/worker/trigger. When empty, the auth check is disabled and
+	// the endpoint accepts any caller (back-compat). Set via
+	// SetWorkerAuthToken from main.go when the WORKER_AUTH_TOKEN env var
+	// is configured.
+	workerAuthToken string
+}
+
+// SetWorkerAuthToken enables bearer-token authentication on
+// POST /_/worker/trigger. When token is non-empty, requests to that
+// endpoint must carry `Authorization: Bearer <token>` (scheme is
+// case-insensitive per RFC 6750) and the token portion must
+// constant-time-equal the configured value; otherwise the server
+// responds 401 with `WWW-Authenticate: Bearer realm="worker-trigger"`.
+// When token is empty (the default), no check is performed.
+//
+// Called once at startup from main.go after reading the env var. Not
+// thread-safe — calling this after the listener has started will race
+// with in-flight requests.
+func (s *Server) SetWorkerAuthToken(token string) {
+	s.workerAuthToken = token
 }
 
 // NewServer constructs a Server in CacheModeOff. Both client roles are
@@ -462,7 +485,51 @@ type triggerPayload struct {
 	Formats  []string `json:"formats"`
 }
 
+// authorizeWorkerTrigger validates the per-request `Authorization` header
+// against the configured bearer token. Returns true when the request
+// should proceed and false when a 401 has already been written to w.
+//
+// When s.workerAuthToken is empty, no check is performed and the
+// function returns true unconditionally (back-compat for deployments
+// that don't set WORKER_AUTH_TOKEN).
+func (s *Server) authorizeWorkerTrigger(w http.ResponseWriter, r *http.Request) bool {
+	if s.workerAuthToken == "" {
+		return true
+	}
+
+	const prefix = "bearer "
+	header := r.Header.Get("Authorization")
+	if len(header) < len(prefix) || !strings.EqualFold(header[:len(prefix)], prefix) {
+		s.unauthorized(w)
+		return false
+	}
+	provided := header[len(prefix):]
+
+	// Constant-time comparison so per-byte timing doesn't leak the
+	// expected token to brute-force attackers.
+	if subtle.ConstantTimeCompare([]byte(provided), []byte(s.workerAuthToken)) != 1 {
+		s.unauthorized(w)
+		return false
+	}
+	return true
+}
+
+// unauthorized writes a 401 response with the standard
+// `WWW-Authenticate: Bearer` challenge per RFC 6750.
+func (s *Server) unauthorized(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", `Bearer realm="worker-trigger"`)
+	w.Header().Set("Cache-Control", "max-age=30")
+	http.Error(w, "Unauthorized", http.StatusUnauthorized)
+}
+
 func (s *Server) handleWorkerTrigger(w http.ResponseWriter, r *http.Request) {
+	// Auth runs BEFORE JSON parsing so unauthorized callers don't waste
+	// parse cycles and don't generate noisy 400 log lines on garbage
+	// bodies.
+	if !s.authorizeWorkerTrigger(w, r) {
+		return
+	}
+
 	var payload triggerPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		s.httpError(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
