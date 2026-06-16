@@ -97,6 +97,16 @@ Legacy fallback (origin-side migration; unchanged):
 Server:
 - `PORT` — server port. Defaults to `8080`.
 
+Auth:
+- `WORKER_AUTH_TOKEN` — optional bearer token for `POST /_/worker/trigger`.
+  When **unset or empty**, the trigger endpoint is unauthenticated (today's
+  default). When **set**, every trigger request must carry
+  `Authorization: Bearer <token>`; missing or wrong-token requests get
+  `401 Unauthorized` + `WWW-Authenticate: Bearer realm="worker-trigger"`.
+  The token is compared in constant time via `crypto/subtle`.
+  GET read paths (the three URL regex families) are **not** affected —
+  they remain public and rely on Cloudflare / load-balancer controls.
+
 Worker (bulk pre-resize defaults):
 - `SIZES` — JSON array of target sizes (e.g. `[[150,210],[240,0]]`). Defaults to a predefined list of 33. Used as the fallback when a trigger payload omits `sizes`.
 - `FORMAT` — historically the env-wide target format. **No longer used by the trigger** — the new payload requires `formats` explicitly. Kept as a field on the worker struct in case future internal callers need a default.
