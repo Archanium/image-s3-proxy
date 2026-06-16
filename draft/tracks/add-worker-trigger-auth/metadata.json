@@ -2,15 +2,15 @@
   "id": "add-worker-trigger-auth",
   "title": "Bearer-token auth on POST /_/worker/trigger",
   "type": "quick",
-  "status": "planning",
+  "status": "in_progress",
   "created": "2026-06-16T08:35:00Z",
-  "updated": "2026-06-16T08:35:00Z",
+  "updated": "2026-06-16T08:50:00Z",
   "phases": {
     "total": 1,
     "completed": 0
   },
   "tasks": {
     "total": 8,
-    "completed": 0
+    "completed": 7
   }
 }
