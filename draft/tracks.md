@@ -17,7 +17,13 @@ synced_to_commit: "6f2e71a3c70d732b573801747ca0435698c9d0e5"
 # Tracks
 
 ## Active
-<!-- No active tracks -->
+
+### add-worker-trigger-auth - Bearer-token auth on POST /_/worker/trigger
+- **Status:** [~] In Progress
+- **Created:** 2026-06-16
+- **Phases:** 0/1 (quick)
+- **Tasks:** 0/8
+- **Path:** `./tracks/add-worker-trigger-auth/`
 
 ## Completed
 
