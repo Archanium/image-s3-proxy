@@ -6,12 +6,13 @@ generated_at: "2026-06-12T12:41:43Z"
 git:
   branch: "main"
   remote: "origin/main"
-  commit: "21fdfb3c6f1fc77bc3f10c54bd56e804e5ff0d86"
-  commit_short: "21fdfb3"
-  commit_date: "2026-05-07 18:46:19 +0200"
-  commit_message: "fix: updating the tests and fixing an error on the normalized key"
+  commit: "0ad560e87b8aa60bf902a92d5a3e52e16a8ae3d1"
+  commit_short: "0ad560e"
+  commit_date: "2026-06-16 00:48:55 +0200"
+  commit_message: "feat: extend worker trigger to multi-image / multi-format batches (#4)"
   dirty: false
-synced_to_commit: "21fdfb3c6f1fc77bc3f10c54bd56e804e5ff0d86"
+synced_to_commit: "0ad560e87b8aa60bf902a92d5a3e52e16a8ae3d1"
+bookkeeping_note: "draft/architecture.md, draft/.ai-context.md, draft/.ai-profile.md, and draft/.state/* still reference the init commit 21fdfb3. PRs #1-#4 have materially shifted the architecture (new internal/accesslog package, CacheMode + canary topology, BatchRequest envelope). Run /draft:init refresh when ready to bring those documents up to date."
 ---
 
 # Tracks
