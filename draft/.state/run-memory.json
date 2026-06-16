@@ -1,41 +1,66 @@
 {
-  "run_id": "init-2026-06-12-image-s3-proxy",
-  "started_at": "2026-06-12T12:41:43Z",
-  "completed_at": "2026-06-12T12:41:43Z",
-  "run_type": "init",
+  "run_id": "refresh-2026-06-16-image-s3-proxy",
+  "started_at": "2026-06-16T08:20:05Z",
+  "completed_at": "2026-06-16T08:25:00Z",
+  "run_type": "refresh",
   "status": "completed",
-  "phases_completed": ["phase_1_discovery", "phase_2_wiring", "phase_3_depth", "phase_4_periphery", "phase_5_synthesis"],
+  "previous_run_id": "init-2026-06-12-image-s3-proxy",
+  "synced_from_commit": "21fdfb3c6f1fc77bc3f10c54bd56e804e5ff0d86",
+  "synced_to_commit": "6f2e71a3c70d732b573801747ca0435698c9d0e5",
+  "merged_prs_since_last_sync": [
+    "#1 feat: structured access logs + Server-Timing header",
+    "#2 feat: split origin/cache buckets + canary mode (off/shadow/live)",
+    "#3 feat: include per-phase timings in JSON access log",
+    "#4 feat: extend worker trigger to multi-image / multi-format batches"
+  ],
+  "phases_completed": [
+    "state_diff_against_synced_commit",
+    "architecture_md_refresh",
+    "ai_context_md_refresh",
+    "ai_profile_md_refresh",
+    "freshness_json_recompute",
+    "signals_json_reclassify",
+    "facts_json_evolution"
+  ],
   "phases_remaining": [],
-  "files_analyzed": 11,
+  "files_analyzed": 19,
   "files_generated": [
     "draft/architecture.md",
     "draft/.ai-context.md",
     "draft/.ai-profile.md",
-    "draft/product.md",
-    "draft/tech-stack.md",
-    "draft/workflow.md",
-    "draft/guardrails.md",
-    "draft/tracks.md",
-    "draft/.state/facts.json",
     "draft/.state/freshness.json",
     "draft/.state/signals.json",
+    "draft/.state/facts.json",
     "draft/.state/run-memory.json"
   ],
-  "unresolved_questions": [
-    "Should worker.go:78 hard-coded clientId=13 be removed (refactor) or is there a different deployment per client expected to take the value via env?",
-    "Should types.Storage interface be deleted (dead code) or wired up — is it the start of an aborted pluggable-storage refactor?",
-    "Should server.NewServer wire a destination S3 client to the internal worker (currently nil), or should server-instantiated workers explicitly not support cross-bucket writes?",
-    "Should POST /_/worker/trigger gain a shared-secret header check, or is the LB-level authz contract documented elsewhere?"
+  "resolved_questions": [
+    {
+      "question": "Should worker.go:78 hard-coded clientId=13 be removed?",
+      "resolution": "Resolved by PR #4 (extend-worker-payload). clientId now comes from BatchRequest.ClientID payload field. Regression-guard test asserts no Put key starts with '13/'."
+    },
+    {
+      "question": "Should server.NewServer wire a destination S3 client to the internal worker?",
+      "resolution": "Resolved by PR #2 (split-origin-and-cache-buckets). When CACHE_MODE != off, cacheClient is wired as the worker's destS3Client. Dual-write becomes live for both server-path and worker-batch PUTs."
+    }
   ],
-  "active_focus_areas": ["backend_routes", "services", "data_models", "test_infra", "background_jobs", "persistence"],
+  "unresolved_questions": [
+    "Should types.Storage interface be deleted (dead code) or wired up — is it the start of an aborted pluggable-storage refactor?",
+    "Should POST /_/worker/trigger gain a shared-secret header check, or is the LB-level authz contract documented elsewhere? (Risk now more concrete after PR #4 removed the clientId=13 limit on impersonation surface — see architecture.md §9 gap #5.)"
+  ],
+  "active_focus_areas": ["backend_routes", "services", "background_jobs", "persistence", "observability"],
   "resumable_checkpoint": null,
   "graph_engine": {
     "attempted": false,
-    "reason": "codebase-memory-mcp binary not present in environment; tier-1 micro project allows direct read with High synthesis fidelity"
+    "reason": "codebase-memory-mcp binary not present; tier-1 micro project allows direct read with High synthesis fidelity. Same as init run."
   },
   "context_audit": {
-    "level": "low",
-    "files_detected": ["README.md", "junie.md", ".junie/memory/*"],
-    "notes": "junie.md is a generic Go style guide, not project-specific. .junie/memory is session state. README is operational. No high-fidelity AI-agent doc was duplicated."
+    "level": "low-medium-since-refresh",
+    "files_detected": [
+      "README.md (now substantial: documents access log, CACHE_MODE, X-Use-Cache, worker trigger envelope)",
+      "junie.md",
+      ".junie/memory/*",
+      "draft/tracks/*/spec.md (4 completed track specs)"
+    ],
+    "notes": "README has grown into a legitimate operator-facing reference since init. Track spec.md files are authoritative for the 'why' of each merged PR; architecture.md is the synthesis on top."
   }
 }

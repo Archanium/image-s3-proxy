@@ -1,18 +1,17 @@
 ---
 project: "image-s3-proxy"
 module: "root"
-generated_by: "draft:init"
-generated_at: "2026-06-12T12:41:43Z"
+generated_by: "draft:init refresh"
+generated_at: "2026-06-16T08:20:05Z"
 git:
   branch: "main"
   remote: "origin/main"
-  commit: "0ad560e87b8aa60bf902a92d5a3e52e16a8ae3d1"
-  commit_short: "0ad560e"
+  commit: "6f2e71a3c70d732b573801747ca0435698c9d0e5"
+  commit_short: "6f2e71a"
   commit_date: "2026-06-16 00:48:55 +0200"
-  commit_message: "feat: extend worker trigger to multi-image / multi-format batches (#4)"
+  commit_message: "chore: bring draft/tracks.md frontmatter up to current HEAD"
   dirty: false
-synced_to_commit: "0ad560e87b8aa60bf902a92d5a3e52e16a8ae3d1"
-bookkeeping_note: "draft/architecture.md, draft/.ai-context.md, draft/.ai-profile.md, and draft/.state/* still reference the init commit 21fdfb3. PRs #1-#4 have materially shifted the architecture (new internal/accesslog package, CacheMode + canary topology, BatchRequest envelope). Run /draft:init refresh when ready to bring those documents up to date."
+synced_to_commit: "6f2e71a3c70d732b573801747ca0435698c9d0e5"
 ---
 
 # Tracks

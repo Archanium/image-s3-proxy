@@ -1,55 +1,58 @@
 {
-  "generated_at": "2026-06-12T12:41:43Z",
-  "git_commit": "21fdfb3c6f1fc77bc3f10c54bd56e804e5ff0d86",
-  "total_files_scanned": 11,
+  "generated_at": "2026-06-16T08:20:05Z",
+  "git_commit": "6f2e71a3c70d732b573801747ca0435698c9d0e5",
+  "total_files_scanned": 20,
   "signals": {
     "backend_routes": {
       "count": 1,
       "sample_files": ["internal/server/server.go"],
-      "note": "single ServeHTTP entry point with 3 regex routes + 1 POST endpoint; no /routes/ or /handlers/ directory"
+      "note": "Single ServeHTTP entry with 3 regex routes + POST /_/worker/trigger; no routes/ or handlers/ directory"
     },
     "frontend_routes": { "count": 0, "sample_files": [] },
     "components": { "count": 0, "sample_files": [] },
     "services": {
-      "count": 4,
+      "count": 5,
       "sample_files": [
         "internal/s3/s3.go",
         "internal/resizer/resizer.go",
         "internal/server/server.go",
-        "internal/worker/worker.go"
+        "internal/worker/worker.go",
+        "internal/accesslog/middleware.go"
       ],
-      "note": "internal packages act as service-layer modules; no /services/ directory naming convention"
+      "note": "Internal packages act as service-layer modules. Grew from 4 (init) to 5 with the new accesslog package."
     },
     "data_models": {
-      "count": 1,
-      "sample_files": ["internal/types/types.go"],
-      "note": "ImageOptions + interface contracts only; no persistence models — primary store is opaque S3 objects"
+      "count": 2,
+      "sample_files": ["internal/types/types.go", "internal/accesslog/log.go"],
+      "note": "types.ImageOptions + interface contracts; accesslog.Entry and nested structs. No persistence models."
     },
     "auth_files": {
       "count": 0,
       "sample_files": [],
-      "note": "no auth at proxy layer; relies on load balancer / CDN"
+      "note": "No auth at proxy layer; relies on Cloudflare + LB. POST /_/worker/trigger is unauthenticated (gap #5 in architecture.md §9; risk made more concrete by PR #4)."
     },
     "state_management": { "count": 0, "sample_files": [] },
     "background_jobs": {
       "count": 1,
       "sample_files": ["internal/worker/worker.go"],
-      "note": "bulk pre-resize triggered via POST /_/worker/trigger; no queue, no scheduler"
+      "note": "Bulk pre-resize triggered via POST /_/worker/trigger; no queue, no scheduler. After PR #4 the payload is a multi-image / multi-format envelope."
     },
     "persistence": {
       "count": 1,
       "sample_files": ["internal/s3/s3.go"],
-      "note": "S3 only — no relational DB, no ORM"
+      "note": "S3-compatible only — no relational DB, no ORM. Split between origin and cache buckets when CACHE_MODE != off."
     },
     "test_infra": {
-      "count": 5,
+      "count": 9,
       "sample_files": [
-        "internal/s3/s3_test.go",
+        "internal/accesslog/middleware_test.go",
         "internal/server/server_test.go",
-        "internal/resizer/resizer_test.go",
         "internal/worker/worker_test.go",
+        "internal/s3/s3_test.go",
+        "internal/resizer/resizer_test.go",
         "tests/fixtures/"
-      ]
+      ],
+      "note": "9 test files (up from 5 at init); server_test.go alone is 1584 LOC."
     },
     "config_files": {
       "count": 4,
@@ -59,7 +62,18 @@
         "Dockerfile.debian",
         ".circleci/config.yml"
       ],
-      "note": "no application config file; runtime config is env-var only"
+      "note": "Application config remains env-var only (no app config file); 22 env vars (up from 14 at init)."
+    },
+    "observability": {
+      "count": 5,
+      "sample_files": [
+        "internal/accesslog/middleware.go",
+        "internal/accesslog/timings.go",
+        "internal/accesslog/writer.go",
+        "internal/accesslog/log.go",
+        "internal/accesslog/context.go"
+      ],
+      "note": "NEW signal since init. Structured JSON access logs (stdout) + Server-Timing response header + per-phase timings via PRs #1 and #3."
     }
   }
 }

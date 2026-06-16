@@ -1,17 +1,17 @@
 ---
 project: "image-s3-proxy"
 module: "root"
-generated_by: "draft:init"
-generated_at: "2026-06-12T12:41:43Z"
+generated_by: "draft:init refresh"
+generated_at: "2026-06-16T08:20:05Z"
 git:
   branch: "main"
   remote: "origin/main"
-  commit: "21fdfb3c6f1fc77bc3f10c54bd56e804e5ff0d86"
-  commit_short: "21fdfb3"
-  commit_date: "2026-05-07 18:46:19 +0200"
-  commit_message: "fix: updating the tests and fixing an error on the normalized key"
+  commit: "6f2e71a3c70d732b573801747ca0435698c9d0e5"
+  commit_short: "6f2e71a"
+  commit_date: "2026-06-16 00:48:55 +0200"
+  commit_message: "chore: bring draft/tracks.md frontmatter up to current HEAD"
   dirty: false
-synced_to_commit: "21fdfb3c6f1fc77bc3f10c54bd56e804e5ff0d86"
+synced_to_commit: "6f2e71a3c70d732b573801747ca0435698c9d0e5"
 ---
 
 # Product
