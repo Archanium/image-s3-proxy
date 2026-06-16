@@ -16,4 +16,4 @@
 - [x] **Task 5:** README "Auth" subsection added between Server and Worker env-var blocks. (3e10333)
 - [x] **Task 6:** `gofmt -l` clean; `make test` (Alpine) — 5/5 packages green.
 - [x] **Task 7:** Docker smoke: disabled mode → startup log "DISABLED" + 202 on POST without header; enabled mode → startup log "ENABLED", no-header → 401 + `WWW-Authenticate: Bearer realm="worker-trigger"`, wrong token → 401, correct token → 202, GET read path → 404 (not 401).
-- [ ] **Task 8:** Push + PR.
+- [x] **Task 8:** Push + PR — https://github.com/Archanium/image-s3-proxy/pull/5

@@ -2,15 +2,17 @@
   "id": "add-worker-trigger-auth",
   "title": "Bearer-token auth on POST /_/worker/trigger",
   "type": "quick",
-  "status": "in_progress",
+  "status": "completed",
   "created": "2026-06-16T08:35:00Z",
-  "updated": "2026-06-16T08:50:00Z",
+  "updated": "2026-06-16T09:00:00Z",
+  "completed": "2026-06-16T09:00:00Z",
+  "pr_url": "https://github.com/Archanium/image-s3-proxy/pull/5",
   "phases": {
     "total": 1,
-    "completed": 0
+    "completed": 1
   },
   "tasks": {
     "total": 8,
-    "completed": 7
+    "completed": 8
   }
 }

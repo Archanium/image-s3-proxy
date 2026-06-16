@@ -17,15 +17,16 @@ synced_to_commit: "6f2e71a3c70d732b573801747ca0435698c9d0e5"
 # Tracks
 
 ## Active
-
-### add-worker-trigger-auth - Bearer-token auth on POST /_/worker/trigger
-- **Status:** [~] In Progress
-- **Created:** 2026-06-16
-- **Phases:** 0/1 (quick)
-- **Tasks:** 0/8
-- **Path:** `./tracks/add-worker-trigger-auth/`
+<!-- No active tracks -->
 
 ## Completed
+
+### add-worker-trigger-auth - Bearer-token auth on POST /_/worker/trigger
+- **Status:** [x] Completed 2026-06-16
+- **Phases:** 1/1 (quick)
+- **Tasks:** 8/8
+- **PR:** https://github.com/Archanium/image-s3-proxy/pull/5
+- **Path:** `./tracks/add-worker-trigger-auth/`
 
 ### extend-worker-payload - Multi-image / multi-format worker trigger envelope
 - **Status:** [x] Completed 2026-06-16
