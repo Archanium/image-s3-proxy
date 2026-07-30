@@ -51,6 +51,12 @@ func (r *LibvipsResizer) Resize(data []byte, opts types.ImageOptions) ([]byte, s
 	}
 	defer image.Close()
 
+	// Whether the original is a vector SVG governs the default alpha policy:
+	// SVG originals keep transparency, raster originals flatten (see
+	// effectiveKeepAlpha). DetermineImageType sniffs the buffer, so it is
+	// independent of the resize pipeline.
+	inputIsSVG := vips.DetermineImageType(data) == vips.ImageTypeSVG
+
 	// Logic for resizing
 	width := opts.Width
 	height := opts.Height
@@ -108,8 +114,9 @@ func (r *LibvipsResizer) Resize(data []byte, opts types.ImageOptions) ([]byte, s
 		}
 	}
 
-	// Handle alpha/background for all versions
-	if (!opts.KeepAlpha || opts.Format == "jpg") && image.HasAlpha() {
+	// Handle alpha/background: flatten to a white background unless the
+	// effective policy preserves transparency for this source + format.
+	if !effectiveKeepAlpha(opts.AlphaMode, inputIsSVG, opts.Format) && image.HasAlpha() {
 		err = image.Flatten(&vips.Color{R: 255, G: 255, B: 255})
 		if err != nil {
 			return nil, "", err
@@ -154,4 +161,33 @@ func (r *LibvipsResizer) Resize(data []byte, opts types.ImageOptions) ([]byte, s
 	}
 
 	return buf, contentType, nil
+}
+
+// formatSupportsAlpha reports whether the given output format can carry an
+// alpha channel. jpg/jpeg cannot, so transparency there always flattens.
+func formatSupportsAlpha(format string) bool {
+	switch strings.ToLower(format) {
+	case "png", "webp", "avif":
+		return true
+	default:
+		return false
+	}
+}
+
+// effectiveKeepAlpha resolves the tri-state AlphaMode against the input type
+// and output format into a concrete keep-vs-flatten decision:
+//
+//   - AlphaKeep    → keep when the format supports alpha (jpg still flattens).
+//   - AlphaFlatten → always flatten.
+//   - AlphaAuto    → keep only for SVG originals into alpha-capable formats;
+//     raster originals flatten (historical behavior).
+func effectiveKeepAlpha(mode types.AlphaMode, inputIsSVG bool, format string) bool {
+	switch mode {
+	case types.AlphaKeep:
+		return formatSupportsAlpha(format)
+	case types.AlphaFlatten:
+		return false
+	default: // AlphaAuto
+		return inputIsSVG && formatSupportsAlpha(format)
+	}
 }
