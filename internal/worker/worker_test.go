@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"image-proxy/internal/types"
@@ -115,6 +116,57 @@ func TestProcessBatch_HappyPath_SingleImage_SingleSize_SingleFormat(t *testing.T
 	want := "39/3/images/products/100/100/foo.jpg.avif"
 	if puts[0] != want {
 		t.Errorf("put key = %q, want %q", puts[0], want)
+	}
+}
+
+// TestProcessBatch_SVGOriginal_ForwardsBytesWithAutoAlpha proves the bulk
+// pre-resize path handles SVG originals (FR5): the worker fetches the SVG
+// bytes and forwards them unmodified to the resizer with AlphaMode defaulting
+// to AlphaAuto — it never overrides alpha (there is no alpha field in the
+// batch payload by design). The actual keep/flatten behavior for AlphaAuto +
+// SVG is proven in resizer.TestAlphaPolicy, so the two together cover FR5
+// without coupling worker tests to libvips.
+func TestProcessBatch_SVGOriginal_ForwardsBytesWithAutoAlpha(t *testing.T) {
+	svg, err := os.ReadFile("../../tests/fixtures/logo.svg")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	gotModes := map[string]types.AlphaMode{}
+	forwardedMatches := 0
+	rz := &mockResizer{
+		resizeFunc: func(data []byte, opts types.ImageOptions) ([]byte, string, error) {
+			mu.Lock()
+			gotModes[opts.Format] = opts.AlphaMode
+			if bytes.Equal(data, svg) {
+				forwardedMatches++
+			}
+			mu.Unlock()
+			return []byte("out"), "image/" + opts.Format, nil
+		},
+	}
+	s3 := &mockS3Client{getFunc: newGet(svg, "image/svg+xml")}
+	w := NewWorker(s3, nil, rz, [][]int{{240, 0}}, "avif", false)
+
+	if err := w.ProcessBatch(context.Background(), BatchRequest{
+		ClientID: "39", Version: 3,
+		Images:  []string{"catalog/branding/images/logo.svg"},
+		Formats: []string{"png", "jpg"},
+	}); err != nil {
+		t.Fatalf("ProcessBatch: %v", err)
+	}
+
+	if forwardedMatches != 2 {
+		t.Errorf("resizer received the SVG original bytes %d times, want 2", forwardedMatches)
+	}
+	for _, f := range []string{"png", "jpg"} {
+		if gotModes[f] != types.AlphaAuto {
+			t.Errorf("format %s: opts.AlphaMode = %v, want AlphaAuto", f, gotModes[f])
+		}
+	}
+	if puts := s3.PutKeys(); len(puts) != 2 {
+		t.Errorf("put count = %d, want 2; keys=%v", len(puts), puts)
 	}
 }
 
