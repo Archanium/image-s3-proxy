@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y \
     git \
     build-essential \
     pkg-config \
+    librsvg2-dev \
     libvips-dev
 
 WORKDIR /app
@@ -26,6 +27,7 @@ FROM debian:bookworm-slim
 # Install libvips dependencies in the final image
 RUN apt-get update && apt-get install -y \
     ca-certificates \
+    librsvg2-2 \
     libvips42 \
     && rm -rf /var/lib/apt/lists/*
 

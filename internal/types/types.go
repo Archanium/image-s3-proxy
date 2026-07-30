@@ -2,13 +2,32 @@ package types
 
 import "context"
 
+// AlphaMode controls how source transparency is handled when producing the
+// output image. It is set by the request layer (from an optional URL segment)
+// and interpreted by the resizer.
+type AlphaMode int
+
+const (
+	// AlphaAuto is the default (zero value): keep transparency for SVG
+	// originals when the output format supports alpha (png/webp/avif), and
+	// flatten raster originals to white — preserving historical behavior for
+	// existing raster sources.
+	AlphaAuto AlphaMode = iota
+	// AlphaKeep forces transparency to be preserved when the output format
+	// supports it. jpg/jpeg have no alpha channel, so they still flatten.
+	AlphaKeep
+	// AlphaFlatten forces flattening to a white background regardless of the
+	// source or output format.
+	AlphaFlatten
+)
+
 type ImageOptions struct {
 	Width      int
 	Height     int
 	Version    int
-	Format     string // png, jpg, avif, etc.
-	Fit        string // contain, inside, etc.
-	KeepAlpha  bool
+	Format     string    // png, jpg, avif, etc.
+	Fit        string    // contain, inside, etc.
+	AlphaMode  AlphaMode // how to handle source transparency (default AlphaAuto)
 	IsAnimated bool
 }
 

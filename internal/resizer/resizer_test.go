@@ -124,6 +124,46 @@ func TestResizeRectangular(t *testing.T) {
 	}
 }
 
+// TestResizeSVGToPNG proves libvips can load an SVG original and rasterize
+// it to PNG at the requested size. A load failure here is the diagnostic
+// for a libvips build without librsvg (Phase 1 / risk R1).
+func TestResizeSVGToPNG(t *testing.T) {
+	r := NewResizer()
+	data, err := os.ReadFile("../../tests/fixtures/logo.svg")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// logo.svg has viewBox 0 0 596 43, so a width-only request keeps aspect.
+	opts := types.ImageOptions{Width: 240, Height: 0, Version: 1, Format: "png"}
+	resized, contentType, err := r.Resize(data, opts)
+	if err != nil {
+		t.Fatalf("Resize of SVG failed (librsvg missing?): %v", err)
+	}
+	if contentType != "image/png" {
+		t.Errorf("Expected content type image/png, got %q", contentType)
+	}
+
+	img, err := vips.LoadImageFromBuffer(resized, nil)
+	if err != nil {
+		t.Fatalf("Failed to load rasterized SVG output: %v", err)
+	}
+	defer img.Close()
+
+	// The wide 596:43 viewBox makes height the binding dimension after integer
+	// truncation in the shared resize math (17.31 -> 17), so width lands a few px
+	// under the requested 240. This is existing engine behavior, deterministic
+	// from the viewBox ratio; assert aspect preservation rather than a pixel-exact
+	// width so the test is stable and doesn't depend on the resize rounding.
+	if img.Width() < 235 || img.Width() > 240 {
+		t.Errorf("Expected width ~240 (aspect-rounded), got %d", img.Width())
+	}
+	wantH := img.Width() * 43 / 596
+	if img.Height() < wantH-1 || img.Height() > wantH+1 {
+		t.Errorf("Expected height ~%d for preserved 596:43 aspect, got %d", wantH, img.Height())
+	}
+}
+
 func TestTransparentToJpg(t *testing.T) {
 	r := NewResizer()
 	data, err := os.ReadFile("../../tests/fixtures/transparent.png")
@@ -149,5 +189,59 @@ func TestTransparentToJpg(t *testing.T) {
 	// JPEG has 3 channels (R, G, B)
 	if pixel[0] < 255 || pixel[1] < 255 || pixel[2] < 255 {
 		t.Errorf("Expected white background (255, 255, 255), got (%f, %f, %f)", pixel[0], pixel[1], pixel[2])
+	}
+}
+
+// TestAlphaPolicy exercises the tri-state alpha engine across source type,
+// output format, and AlphaMode. The output either carries an alpha channel
+// (transparency preserved) or not (flattened to white) — HasAlpha() is the
+// discriminator, since Flatten removes the channel.
+func TestAlphaPolicy(t *testing.T) {
+	r := NewResizer()
+	logo, err := os.ReadFile("../../tests/fixtures/logo.svg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rasterAlpha, err := os.ReadFile("../../tests/fixtures/transparent.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name      string
+		src       []byte
+		format    string
+		mode      types.AlphaMode
+		wantAlpha bool
+	}{
+		{"svg auto png keeps alpha", logo, "png", types.AlphaAuto, true},
+		{"svg auto webp keeps alpha", logo, "webp", types.AlphaAuto, true},
+		{"svg auto avif keeps alpha", logo, "avif", types.AlphaAuto, true},
+		{"svg auto jpg flattens", logo, "jpg", types.AlphaAuto, false},
+		{"raster auto png flattens (no regression)", rasterAlpha, "png", types.AlphaAuto, false},
+		{"raster keep png preserves alpha", rasterAlpha, "png", types.AlphaKeep, true},
+		{"raster keep webp preserves alpha", rasterAlpha, "webp", types.AlphaKeep, true},
+		{"svg flatten png flattens", logo, "png", types.AlphaFlatten, false},
+		{"svg keep jpg still flattens (no alpha channel)", logo, "jpg", types.AlphaKeep, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, _, err := r.Resize(tt.src, types.ImageOptions{
+				Width: 64, Height: 0, Version: 1, Format: tt.format, AlphaMode: tt.mode,
+			})
+			if err != nil {
+				t.Fatalf("Resize failed: %v", err)
+			}
+			img, err := vips.LoadImageFromBuffer(out, nil)
+			if err != nil {
+				t.Fatalf("Failed to load output: %v", err)
+			}
+			defer img.Close()
+
+			if got := img.HasAlpha(); got != tt.wantAlpha {
+				t.Errorf("HasAlpha() = %v, want %v", got, tt.wantAlpha)
+			}
+		})
 	}
 }

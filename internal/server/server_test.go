@@ -671,6 +671,147 @@ func TestRegexMatching(t *testing.T) {
 	}
 }
 
+// TestAlphaSegmentParsing is the R2 guard: the optional flat/alpha segment
+// must be captured only when present as a distinct path segment, and must
+// never shadow a real filename or a folder that happens to be named
+// "flat"/"alpha".
+func TestAlphaSegmentParsing(t *testing.T) {
+	tests := []struct {
+		name      string
+		path      string
+		regex     string
+		wantAlpha string
+		wantPath  string
+	}{
+		{"resize flat segment", "39/3/images/branding/350/438/flat/logo.png", "resize", "flat", "logo.png"},
+		{"resize alpha segment", "39/3/images/branding/350/438/alpha/logo.png", "resize", "alpha", "logo.png"},
+		{"resize file named flat.png is not a segment", "39/3/images/branding/350/438/flat.png", "resize", "", "flat.png"},
+		{"resize file named alpha.png is not a segment", "39/3/images/branding/350/438/alpha.png", "resize", "", "alpha.png"},
+		{"resize normal file unaffected", "39/3/images/branding/350/438/logo.png", "resize", "", "logo.png"},
+		{"folderImage folder named flat is not a segment", "123/images/flat/logo.png", "folderImage", "", "logo.png"},
+		{"folderImage flat segment after folder", "123/images/custom/flat/logo.png", "folderImage", "flat", "logo.png"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var groups map[string]string
+			switch tt.regex {
+			case "resize":
+				groups = getNamedGroups(resizeRegex, tt.path)
+			case "folderImage":
+				groups = getNamedGroups(folderImageRegex, tt.path)
+			}
+			if groups == nil {
+				t.Fatalf("expected match for %s, got nil", tt.path)
+			}
+			if groups["alpha"] != tt.wantAlpha {
+				t.Errorf("alpha group = %q, want %q", groups["alpha"], tt.wantAlpha)
+			}
+			if groups["path"] != tt.wantPath {
+				t.Errorf("path group = %q, want %q", groups["path"], tt.wantPath)
+			}
+		})
+	}
+}
+
+// TestGetNormalizedKey_AlphaSegment pins the cache-key output: existing
+// (segment-absent) URLs normalize unchanged, and the alpha keyword produces a
+// distinct key so flat/alpha/default never collide (FR4).
+func TestGetNormalizedKey_AlphaSegment(t *testing.T) {
+	srv := NewServer(&mockS3Client{}, &mockResizer{}, nil, "")
+	tests := []struct {
+		name      string
+		path      string
+		regex     string
+		regexType int
+		want      string
+	}{
+		// Regression guard: segment-absent URLs normalize exactly as before.
+		{"regex1 no segment unchanged", "123-group/2/images/products/150/210/test-image.jpg.webp", "resize", 1, "123-group/2/images/products/150/210/test-image.jpg.webp"},
+		{"regex3 no segment unchanged", "123/images/custom/another-image.png", "folderImage", 3, "123/0/images/custom/another-image.png"},
+		// Alpha segment becomes part of the key.
+		{"regex1 flat", "39/3/images/branding/350/438/flat/logo.png", "resize", 1, "39/3/images/branding/350/438/flat/logo.png"},
+		{"regex1 alpha", "39/3/images/branding/350/438/alpha/logo.png", "resize", 1, "39/3/images/branding/350/438/alpha/logo.png"},
+		{"regex3 flat", "123/images/branding/flat/logo.svg.png", "folderImage", 3, "123/0/images/branding/flat/logo.svg.png"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var groups map[string]string
+			switch tt.regex {
+			case "resize":
+				groups = getNamedGroups(resizeRegex, tt.path)
+			case "folderImage":
+				groups = getNamedGroups(folderImageRegex, tt.path)
+			}
+			if groups == nil {
+				t.Fatalf("expected match for %s, got nil", tt.path)
+			}
+			if got := srv.getNormalizedKey(groups, tt.regexType); got != tt.want {
+				t.Errorf("getNormalizedKey = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestServeHTTP_AlphaSegment is the end-to-end check: the URL segment drives
+// opts.AlphaMode and the cached Put key carries the segment while the source
+// lookup (originalKey) is identical across all three modes.
+func TestServeHTTP_AlphaSegment(t *testing.T) {
+	const origKey = "39/catalog/branding/images/logo.png"
+	tests := []struct {
+		name       string
+		url        string
+		wantMode   types.AlphaMode
+		wantPutKey string
+	}{
+		{"flat forces flatten", "/39/3/images/branding/350/438/flat/logo.png", types.AlphaFlatten, "39/3/images/branding/350/438/flat/logo.png"},
+		{"alpha forces keep", "/39/3/images/branding/350/438/alpha/logo.png", types.AlphaKeep, "39/3/images/branding/350/438/alpha/logo.png"},
+		{"no segment is auto", "/39/3/images/branding/350/438/logo.png", types.AlphaAuto, "39/3/images/branding/350/438/logo.png"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotMode types.AlphaMode
+			var gotPutKey string
+			var gotOrigKeys []string
+			s3 := &mockS3Client{
+				getFunc: func(ctx context.Context, key string) ([]byte, string, error) {
+					if key == origKey {
+						return []byte("orig"), "image/png", nil
+					}
+					if strings.HasPrefix(key, "39/catalog/") || strings.HasPrefix(key, "39/images/") {
+						gotOrigKeys = append(gotOrigKeys, key)
+					}
+					return nil, "", &s3types.NoSuchKey{}
+				},
+				putFunc: func(ctx context.Context, key string, data []byte, contentType string) error {
+					gotPutKey = key
+					return nil
+				},
+			}
+			rz := &mockResizer{
+				resizeFunc: func(data []byte, opts types.ImageOptions) ([]byte, string, error) {
+					gotMode = opts.AlphaMode
+					return []byte("resized"), "image/png", nil
+				},
+			}
+			srv := NewServer(s3, rz, nil, "")
+			req := httptest.NewRequest("GET", tt.url, nil)
+			w := httptest.NewRecorder()
+			srv.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
+			}
+			if gotMode != tt.wantMode {
+				t.Errorf("opts.AlphaMode = %v, want %v", gotMode, tt.wantMode)
+			}
+			if gotPutKey != tt.wantPutKey {
+				t.Errorf("cached Put key = %q, want %q", gotPutKey, tt.wantPutKey)
+			}
+		})
+	}
+}
+
 func TestSpecificURLMapping(t *testing.T) {
 	requestedKey := "9/3/images/blocks/2000/0/prespring-forside-4196157.png.webp"
 	expectedOriginalKey1 := "9/catalog/blocks/images/prespring-forside-4196157.png"

@@ -6,6 +6,7 @@ RUN apk add --no-cache \
     git \
     build-base \
     pkgconfig \
+    librsvg \
     vips-dev \
     vips-heif
 
@@ -28,6 +29,7 @@ FROM alpine:3.19
 RUN apk add --no-cache \
     vips \
     vips-heif \
+    librsvg \
     ca-certificates
 
 # Create a non-root user

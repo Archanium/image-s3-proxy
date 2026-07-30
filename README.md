@@ -7,6 +7,8 @@ original Node.js implementation.
 - Fetches images from S3 (or any S3-compatible storage — Hetzner Object Storage,
   Cloudflare R2, MinIO, etc.).
 - Resizes images on-the-fly based on URL patterns.
+- Rasterizes **SVG** originals to any raster output format (`png`/`jpg`/`webp`/`avif`),
+  preserving transparency by default (see *SVG & transparency* below).
 - Caches resized images back to S3.
 - Optional split-bucket topology (origin + cache) with a canary migration mode
   for safely moving the cache layer to a different provider.
@@ -160,6 +162,39 @@ logged independently.
 
 The legacy `{"key": "..."}` payload is no longer accepted; callers must migrate to the
 envelope before the new build ships, or they will receive 400.
+
+## SVG & transparency
+
+SVG is a supported **input** (original) format: an SVG original is rasterized to the
+requested raster output format at the requested size. SVG is never emitted — there is
+no SVG output format, and `svg` is not a valid value in a worker-trigger `formats`
+array. (A stored `.svg` object requested by its exact key is still served verbatim by
+the direct-serve path, unchanged by this.)
+
+Transparency is handled by an alpha policy that defaults sensibly per source type and
+can be overridden per request:
+
+| Source | Output `png`/`webp`/`avif` | Output `jpg`/`jpeg` |
+|--------|----------------------------|---------------------|
+| SVG    | transparency **kept**      | flattened to white  |
+| Raster (png, …) | flattened to white (unchanged historical behavior) | flattened to white |
+
+`jpg`/`jpeg` have no alpha channel, so they always flatten regardless of source or override.
+
+**Override segment.** An optional `flat/` or `alpha/` segment immediately before the
+filename overrides the default:
+
+```
+.../products/{width}/{height}/flat/{filename}     # force flatten to white
+.../products/{width}/{height}/alpha/{filename}    # force keep transparency
+.../images/{folder}/alpha/{filename}              # also on the folder-image route
+```
+
+The segment is optional and additive — existing URLs are unaffected, and a real file
+named `flat.png` or a folder named `flat` is **not** treated as an override (the
+trailing slash disambiguates). Because the segment is part of the cache key, the
+default, `flat/`, and `alpha/` variants of the same source cache independently.
+
 
 Deprecated:
 - `IMAGE_TAGS` — used to set S3 object tags. **Deprecated** as of the split-bucket

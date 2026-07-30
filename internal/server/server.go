@@ -19,12 +19,16 @@ import (
 )
 
 var (
-	// Regex 1: Resize request for products/blocks
-	resizeRegex = regexp.MustCompile(`^/?(?P<clientId>\d{1,3})(-(?P<group>[\w]+))?/((?P<version>\d{1})?/?)(?P<images>images/)?(?P<folder>products|blocks|branding)/(?P<width>\d{1,4}[.\d]{0,2})/(?P<height>\d{1,4}[.\d]{0,2})/(?P<path>[\w\.\-]+)$`)
+	// Regex 1: Resize request for products/blocks. An optional `flat/` or
+	// `alpha/` segment before the filename overrides the default alpha policy
+	// (see handleResize). The trailing slash on the keyword disambiguates it
+	// from a real filename like `flat.png`, which falls through to <path>.
+	resizeRegex = regexp.MustCompile(`^/?(?P<clientId>\d{1,3})(-(?P<group>[\w]+))?/((?P<version>\d{1})?/?)(?P<images>images/)?(?P<folder>products|blocks|branding)/(?P<width>\d{1,4}[.\d]{0,2})/(?P<height>\d{1,4}[.\d]{0,2})/((?P<alpha>flat|alpha)/)?(?P<path>[\w\.\-]+)$`)
 	// Regex 2: File request
 	fileRegex = regexp.MustCompile(`^/?(?P<clientId>\d{1,3})(-(?P<group>[\w]+))?/files/(?P<fileId>\d{1,3})/(?P<path>[\w\.\-]+)$`)
-	// Regex 3: Simple image request (often with format change)
-	folderImageRegex = regexp.MustCompile(`^/?(?P<clientId>\d{1,3})(-(?P<group>[\w]+))?/((?P<version>\d{1})?/?)(?P<images>images/)(?P<folder>[^/]+)/(?P<path>[\w\.\-]+)$`)
+	// Regex 3: Simple image request (often with format change). Same optional
+	// `flat/` / `alpha/` override segment as Regex 1.
+	folderImageRegex = regexp.MustCompile(`^/?(?P<clientId>\d{1,3})(-(?P<group>[\w]+))?/((?P<version>\d{1})?/?)(?P<images>images/)(?P<folder>[^/]+)/((?P<alpha>flat|alpha)/)?(?P<path>[\w\.\-]+)$`)
 )
 
 // CacheMode controls how the proxy uses its origin and cache S3 clients.
@@ -328,6 +332,19 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request, key string
 	log.Printf("Calculated originalKey: %s", originalKey)
 	opts.Version = version
 	opts.Format = format
+
+	// Optional alpha override from the URL segment. Absent → AlphaAuto (SVG
+	// keeps alpha, raster flattens). This segment is part of the cache key
+	// (getNormalizedKey) but never part of originalKey — the source lookup is
+	// independent of the render directive.
+	switch groups["alpha"] {
+	case "flat":
+		opts.AlphaMode = types.AlphaFlatten
+	case "alpha":
+		opts.AlphaMode = types.AlphaKeep
+	default:
+		opts.AlphaMode = types.AlphaAuto
+	}
 
 	if regexType == 1 {
 		wVal, _ := strconv.Atoi(groups["width"])
@@ -640,6 +657,12 @@ func (s *Server) getNormalizedKey(groups map[string]string, regexType int) strin
 		sb.WriteString("/")
 	} else if regexType == 3 {
 		sb.WriteString(folder)
+		sb.WriteString("/")
+	}
+	// The alpha override segment is part of the cache key so `flat/`, `alpha/`
+	// and the default cache as distinct variants of the same source.
+	if alpha := groups["alpha"]; alpha != "" {
+		sb.WriteString(alpha)
 		sb.WriteString("/")
 	}
 	sb.WriteString(path)
