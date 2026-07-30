@@ -25,6 +25,7 @@ synced_to_commit: "6f2e71a3c70d732b573801747ca0435698c9d0e5"
 - **Status:** [x] Completed 2026-07-30
 - **Phases:** 4/4
 - **Tasks:** 21/21
+- **PR:** https://github.com/Archanium/image-s3-proxy/pull/6
 - **Path:** `./tracks/support-svg-transparency/`
 
 ### add-worker-trigger-auth - Bearer-token auth on POST /_/worker/trigger
