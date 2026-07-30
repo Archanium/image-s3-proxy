@@ -1,0 +1,45 @@
+{
+  "id": "support-svg-transparency",
+  "title": "Support SVG originals with transparency preserved",
+  "type": "feature",
+  "status": "completed",
+  "created": "2026-07-28T00:00:00Z",
+  "updated": "2026-07-30T13:00:00Z",
+  "phases": {
+    "total": 4,
+    "completed": 4
+  },
+  "tasks": {
+    "total": 21,
+    "completed": 21
+  },
+  "impact": {
+    "computed_at": "2026-07-30T13:00:00Z",
+    "files_touched": [
+      "Dockerfile.alpine",
+      "Dockerfile.debian",
+      "README.md",
+      "internal/resizer/resizer.go",
+      "internal/resizer/resizer_test.go",
+      "internal/server/server.go",
+      "internal/server/server_test.go",
+      "internal/types/types.go",
+      "internal/worker/worker_test.go",
+      "tests/fixtures/logo.svg",
+      "tests/fixtures/solid.svg"
+    ],
+    "modules_touched": [
+      "internal/resizer",
+      "internal/server",
+      "internal/types",
+      "internal/worker",
+      "tests/fixtures",
+      "docker",
+      "docs"
+    ],
+    "downstream_files": [],
+    "downstream_modules": [],
+    "max_depth": 0,
+    "by_category": {}
+  }
+}
