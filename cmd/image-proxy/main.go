@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"image-proxy/internal/accesslog"
 	"image-proxy/internal/resizer"
 	"image-proxy/internal/s3"
 	"image-proxy/internal/server"
+	"image-proxy/internal/urlsign"
 	"log"
 	"net/http"
 	"os"
@@ -141,6 +143,47 @@ func main() {
 		log.Printf("worker-trigger auth: ENABLED")
 	} else {
 		log.Printf("worker-trigger auth: DISABLED (set WORKER_AUTH_TOKEN to enable)")
+	}
+
+	// Optional imgproxy-style processing-option route at /_p/. The route is
+	// fail-closed: with no signing key and no explicit unsafe opt-in the
+	// verifier stays nil and /_p/ paths 404 like any other unmatched path,
+	// so this ships inert on every existing deployment.
+	//
+	// SIGNATURE_KEY and SIGNATURE_SALT are hex-encoded, matching imgproxy's
+	// IMGPROXY_KEY / IMGPROXY_SALT convention, so an off-the-shelf imgproxy
+	// signing SDK can generate URLs for this service unmodified.
+	signatureSize, _ := strconv.Atoi(os.Getenv("SIGNATURE_SIZE"))
+	allowUnsafeURLs := os.Getenv("ALLOW_UNSAFE_URLS") == "true"
+	signer, err := urlsign.NewVerifier(
+		os.Getenv("SIGNATURE_KEY"),
+		os.Getenv("SIGNATURE_SALT"),
+		signatureSize,
+		allowUnsafeURLs,
+	)
+	switch {
+	case errors.Is(err, urlsign.ErrNotConfigured):
+		log.Printf("processing-option route /_p/: DISABLED (set SIGNATURE_KEY and SIGNATURE_SALT to enable)")
+	case err != nil:
+		log.Fatalf("Invalid URL signing configuration (SIGNATURE_KEY / SIGNATURE_SALT / SIGNATURE_SIZE): %v", err)
+	default:
+		srv.SetURLSigner(signer)
+		log.Printf("processing-option route /_p/: ENABLED")
+		if allowUnsafeURLs {
+			log.Printf("WARNING: ALLOW_UNSAFE_URLS=true — /_p/ accepts the literal " +
+				"\"unsafe\" signature, bypassing verification. Do not use this in production.")
+		}
+	}
+
+	// MAX_DIMENSION bounds width, height and absolute crop dimensions on the
+	// /_p/ route, enforced before any S3 read or libvips call.
+	if maxDim := os.Getenv("MAX_DIMENSION"); maxDim != "" {
+		n, convErr := strconv.Atoi(maxDim)
+		if convErr != nil || n < 1 {
+			log.Fatalf("MAX_DIMENSION must be a positive integer, got %q", maxDim)
+		}
+		srv.SetMaxDimension(n)
+		log.Printf("processing-option route /_p/: max dimension %d", n)
 	}
 
 	// upstreamHost is logged on every access line. In split mode the
