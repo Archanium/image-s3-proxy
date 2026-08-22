@@ -80,7 +80,7 @@ tree changes, so `make test` is unaffected.
 
 ---
 
-## Phase 2: Resizer semantics
+## Phase 2: Resizer semantics  [x] Complete
 
 **Goal:** `ImageOptions` carries the new fields and `LibvipsResizer.Resize`
 grows a second pipeline entered only when `ResizingType != ""`. The legacy
@@ -92,35 +92,51 @@ the legacy path is untouched.
 
 ### Tasks
 
-- [ ] **Task 9:** `internal/types/types.go` — extend `ImageOptions` with
+- [x] **Task 9 (65688c9):** `internal/types/types.go` — extend `ImageOptions` with
       `ResizingType`, `Enlarge`, `Extend`, `ExtendAspectRatio`, `Gravity`,
       `Crop`, `Background`. All zero-valued by default so every existing
       construction site compiles and behaves identically.
-- [ ] **Task 10:** `internal/resizer/resizer.go` — add the branch at the top of
+- [x] **Task 10 (316e42f):** `internal/resizer/resizer.go` — add the branch at the top of
       `Resize`: `ResizingType != ""` enters the new pipeline, otherwise fall
       through to today's body verbatim. Both branches share the existing export
       switch.
-- [ ] **Task 11:** Crop stage — applied **before** resize per spec F5. Relative
+- [x] **Task 11 (316e42f):** Crop stage — applied **before** resize per spec F5. Relative
       (`0 < v < 1`) versus absolute dimensions; gravity to offsets via
       `ExtractArea`; `sm` via `SmartCrop`; `fp:x:y` focus point.
-- [ ] **Task 12:** Resize stage — map `fit` / `fill` / `fill-down` / `force` /
+- [x] **Task 12 (316e42f):** Resize stage — map `fit` / `fill` / `fill-down` / `force` /
       `auto` onto `vips.Interesting` plus the matching `vips.Size*`, with
       `enlarge` gating upscale. `auto` branches on source-vs-target orientation
       and delegates to `fill` or `fit`.
-- [ ] **Task 13:** Extend stage — `extend` pads to the requested size and
+- [x] **Task 13 (316e42f):** Extend stage — `extend` pads to the requested size and
       `extend_aspect_ratio` pads to the requested ratio, both via `Embed` with
       gravity-derived offsets and the configured background colour.
-- [ ] **Task 14:** Background stage — hex and `R:G:B` forms to `vips.Color`;
+- [x] **Task 14 (316e42f):** Background stage — hex and `R:G:B` forms to `vips.Color`;
       flatten alpha for formats that cannot carry it; no-args `bg:` disables.
-- [ ] **Task 15:** `internal/resizer/resizer_test.go` additions — per-resizing-type
+- [x] **Task 15 (316e42f):** `internal/resizer/resizer_test.go` additions — per-resizing-type
       output dimensions for a landscape source, a portrait source, and a source
       smaller than the request; crop-before-resize ordering; `enlarge` on and
       off; `extend` and `extend_aspect_ratio` padding geometry; colour
       equivalence across `fff`, `ffffff`, and `255:255:255`.
-- [ ] **Task 16:** Verify — run the full existing resizer and server suites with
+- [x] **Task 16 (316e42f):** Verify — run the full existing resizer and server suites with
       no assertion edits, confirming the legacy branch is byte-identical.
 
 ---
+
+### Phase 2 findings
+
+- **libvips `SizeDown` short-circuits.** When the source is already smaller
+  than the requested box, `ThumbnailWithSize` returns it untouched and skips
+  the crop entirely, so the result never reaches the requested aspect ratio.
+  The naive mapping of `fill-down` onto `ThumbnailWithSize(w, h, Centre,
+  SizeDown)` was therefore wrong, and silently so — it returned a plausible
+  image at the wrong ratio. `fillTo` now separates the scale from the crop.
+  This is the semantic-drift risk the spec scored at 8; it was real, and the
+  dimension assertions caught it.
+- **`fill` with `enlarge:0` is equivalent to `fill-down`.** Both never
+  enlarge and both land on the requested ratio. This matches imgproxy, where
+  `fill-down` exists because plain `fill` would otherwise enlarge.
+- **`force` ignores `enlarge`** — it stretches to the exact box by
+  definition. Documented in the code and asserted in the tests.
 
 ## Phase 3: Route wiring, configuration, documentation
 

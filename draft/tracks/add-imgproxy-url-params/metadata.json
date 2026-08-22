@@ -4,29 +4,38 @@
   "type": "feature",
   "status": "in_progress",
   "created": "2026-08-22T09:44:18Z",
-  "updated": "2026-08-22T10:17:26Z",
+  "updated": "2026-08-22T10:58:16Z",
   "phases": {
     "total": 3,
-    "completed": 1
+    "completed": 2
   },
   "tasks": {
     "total": 27,
-    "completed": 8
+    "completed": 16
   },
   "impact": {
-    "computed_at": "2026-08-22T10:17:26Z",
+    "computed_at": "2026-08-22T10:58:16Z",
     "files_touched": [
+      "draft/tracks.md",
+      "draft/tracks/add-imgproxy-url-params/metadata.json",
+      "draft/tracks/add-imgproxy-url-params/plan.md",
+      "draft/tracks/add-imgproxy-url-params/spec.md",
       "internal/procopts/canonical.go",
       "internal/procopts/canonical_test.go",
       "internal/procopts/options.go",
       "internal/procopts/options_test.go",
       "internal/procopts/parse.go",
       "internal/procopts/parse_test.go",
+      "internal/resizer/processing_test.go",
+      "internal/resizer/resizer.go",
+      "internal/types/types.go",
       "internal/urlsign/verify.go",
       "internal/urlsign/verify_test.go"
     ],
     "modules_touched": [
       "procopts",
+      "resizer",
+      "types",
       "urlsign"
     ],
     "downstream_files": 0,
