@@ -50,5 +50,6 @@
     "downstream_modules": [],
     "max_depth": 0,
     "by_category": {}
-  }
+  },
+  "pr": "https://github.com/Archanium/image-s3-proxy/pull/7"
 }
