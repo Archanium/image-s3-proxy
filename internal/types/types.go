@@ -1,6 +1,10 @@
 package types
 
-import "context"
+import (
+	"context"
+
+	"image-proxy/internal/procopts"
+)
 
 // AlphaMode controls how source transparency is handled when producing the
 // output image. It is set by the request layer (from an optional URL segment)
@@ -21,6 +25,22 @@ const (
 	AlphaFlatten
 )
 
+// ImageOptions describes one resize request.
+//
+// Two pipelines share this struct. The legacy fields (Width, Height, Version,
+// Fit, AlphaMode) drive the original Node.js-compatible pipeline used by the
+// three legacy URL families. Processing, when non-nil, selects the
+// imgproxy-style pipeline instead and supersedes Width/Height/Fit — those
+// values come from the option set rather than from the URL regex.
+//
+// Processing is a pointer rather than a set of inlined fields so that the
+// option vocabulary has exactly one definition (in procopts) and so that
+// "which pipeline runs" is a single nil check rather than a convention about
+// which field happens to be non-zero.
+//
+// AlphaMode applies to the legacy pipeline only. The /_p/ route follows
+// imgproxy's rule instead: transparency survives into any alpha-capable
+// format, and the `bg:` option is what flattens it.
 type ImageOptions struct {
 	Width      int
 	Height     int
@@ -29,6 +49,10 @@ type ImageOptions struct {
 	Fit        string    // contain, inside, etc.
 	AlphaMode  AlphaMode // how to handle source transparency (default AlphaAuto)
 	IsAnimated bool
+
+	// Processing selects the imgproxy-style pipeline. Nil means the legacy
+	// pipeline, which is what every pre-existing call site produces.
+	Processing *procopts.Options
 }
 
 type Resizer interface {
