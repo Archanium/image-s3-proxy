@@ -138,7 +138,7 @@ the legacy path is untouched.
 - **`force` ignores `enlarge`** — it stretches to the exact box by
   definition. Documented in the code and asserted in the tests.
 
-## Phase 3: Route wiring, configuration, documentation
+## Phase 3: Route wiring, configuration, documentation  [x] Implementation complete
 
 **Goal:** `/_p/` works end to end behind env gating, and the docs describe it.
 
@@ -148,48 +148,48 @@ the legacy path is untouched.
 
 ### Tasks
 
-- [ ] **Task 17:** `internal/server/server.go` — extract the origin candidate-key
+- [x] **Task 17 (d51b573):** `internal/server/server.go` — extract the origin candidate-key
       ladder out of `handleResize` into
       `originCandidateKeys(clientId, folder, path, format) []string`. Pure
       refactor; `handleResize` calls it; the existing tests must pass untouched.
-- [ ] **Task 18:** `internal/server/server.go` — `urlSigner` field and
+- [x] **Task 18 (d51b573):** `internal/server/server.go` — `urlSigner` field and
       `SetURLSigner(*urlsign.Verifier)`, mirroring the `SetWorkerAuthToken`
       shape and doc-comment convention.
-- [ ] **Task 19:** `internal/server/server.go` — add the `_p/` rung at the top of
+- [x] **Task 19 (d51b573):** `internal/server/server.go` — add the `_p/` rung at the top of
       the dispatch ladder in `ServeHTTP`, gated on the signer being configured;
       a nil signer means the prefix falls through to the ordinary 404 (spec F7).
-- [ ] **Task 20:** `internal/server/server.go` — `handleParams`: verify signature
+- [x] **Task 20 (04bec82):** `internal/server/server.go` — `handleParams`: verify signature
       → parse options → enforce `MAX_DIMENSION` **before** any S3 or libvips call
       → build the canonical key → cache-hit `Get` via `effectiveReadClient` →
       resolve the origin through `originCandidateKeys` → short-circuit `raw` and
       matched `skip_processing` with no `Put` → `Resize` → `putBoth` → serve.
       Every S3 and resize call site wrapped in `s.time` with the existing phase
       names so the access-log contract (I12, I13) holds.
-- [ ] **Task 21:** `internal/server/server.go` — `paramCacheKey` producing
+- [x] **Task 21 (04bec82):** `internal/server/server.go` — `paramCacheKey` producing
       `{clientId}[-{group}]/_p/{canonical}/{rest-of-tail}` per spec F9.
-- [ ] **Task 22:** `cmd/image-proxy/main.go` — read `SIGNATURE_KEY`,
+- [x] **Task 22 (f5e2bfb):** `cmd/image-proxy/main.go` — read `SIGNATURE_KEY`,
       `SIGNATURE_SALT`, `SIGNATURE_SIZE`, `ALLOW_UNSAFE_URLS`, `MAX_DIMENSION`;
       `log.Fatal` naming both vars when exactly one of the key/salt pair is set;
       loud warning when unsafe URLs are enabled; construct the verifier and call
       `SetURLSigner`.
-- [ ] **Task 23:** `internal/server/server_test.go` — route disabled returns 404
+- [x] **Task 23 (04bec82):** `internal/server/server_test.go` — route disabled returns 404
       with no new log noise; the 403 matrix (wrong key, tampered option,
       tampered source, `unsafe` without the flag); the 400 matrix including the
       dimension cap asserting the mock S3 client is **never** called; cache hit
       and miss; `putBoth` targets per `CacheMode`; `X-Use-Cache` override;
       `raw` and skipped responses issuing zero `Put` calls; a `files/`-form tail.
-- [ ] **Task 24:** Update documentation (`README.md`) — new "Processing options"
+- [x] **Task 24 (d7024b4):** Update documentation (`README.md`) — new "Processing options"
       section covering the URL grammar, the full option table, a worked signing
       recipe with a concrete key/salt/URL example, the five new env vars, and the
       cache-key shape. Run `/draft:documentation readme` if a fuller pass is wanted.
-- [ ] **Task 25:** `draft/architecture.md` — add invariants for fail-closed
+- [x] **Task 25 (a46bbf0):** `draft/architecture.md` — add invariants for fail-closed
       enablement, the signed-payload shape, the canonical cache key, and
       raw/skip-never-writes; extend the §7.2 config table with the five new vars
       and the §3.2 URL-family table with the `_p` family.
-- [ ] **Task 26:** Verify — `make fmt`, then `make test` and `make test-debian`
+- [x] **Task 26 (a46bbf0):** Verify — `make fmt`, then `make test` and `make test-debian`
       both green (libvips behaviour differs between Alpine and Debian, and this
       track adds crop, embed, and smart-crop call sites).
-- [ ] **Task 27:** Run `/draft:deploy-checklist` before deploying, and stage the
+- [ ] **Task 27 (deploy-gated — open by design):** Run `/draft:deploy-checklist` before deploying, and stage the
       rollout per spec §Deployment Strategy (staging unsafe → staging signed →
       production signed).
 
@@ -211,3 +211,25 @@ the legacy path is untouched.
 - **Catalog-team coordination is not required for this track** — the worker
   trigger envelope is unchanged (spec Non-Goals). It *will* be required for the
   follow-up that teaches the pre-warm path about canonical option sets.
+
+
+## Status
+
+Tasks 1-26 are done and verified. **Task 27 is deliberately still open**: it
+is the pre-deploy gate, not an implementation step, and running it now would
+be meaningless. Trigger `/draft:deploy-checklist` when the deploy is actually
+scheduled, then stage the rollout per spec §Deployment Strategy — staging
+unsafe, staging signed, production signed.
+
+Verification evidence for tasks 1-26: `make test` (Alpine) and
+`make test-debian` both green across all seven packages, `gofmt -l` clean,
+no `os.Getenv` outside `main.go`, and zero third-party imports in the two
+new packages.
+
+## Tech Debt
+
+| ID | Location | Description | Severity | Payback Trigger |
+|----|----------|-------------|----------|-----------------|
+| TD-1 | `internal/server/params.go:handleParams` | The signed payload is built from the decoded `r.URL.Path`, not `EscapedPath()`. Source keys containing characters that require percent-encoding would sign differently than a client expects. The legacy regex alphabet (`[\w.\-]`) cannot produce such a key, so this is unreachable today. | Low | If source keys ever admit spaces, `+`, `%` or non-ASCII |
+| TD-2 | `internal/urlsign/verify.go:NewVerifier` | The `len(key) == 0` guard is unreachable — any non-empty valid hex decodes to at least one byte, and empty input is caught earlier. Kept as defence. | Low | Never, unless the key source changes |
+| TD-3 | `draft/architecture.md` §9 gap #5 | Pre-existing and unrelated to this track: the doc still lists worker-trigger auth as an open gap, but PR #5 closed it. The doc was generated at `6f2e71a`, one commit before. | Low | Next `/draft:init` refresh |

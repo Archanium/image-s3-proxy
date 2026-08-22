@@ -4,18 +4,20 @@
   "type": "feature",
   "status": "in_progress",
   "created": "2026-08-22T09:44:18Z",
-  "updated": "2026-08-22T10:58:16Z",
+  "updated": "2026-08-22T11:08:13Z",
   "phases": {
     "total": 3,
-    "completed": 2
+    "completed": 3
   },
   "tasks": {
     "total": 27,
-    "completed": 16
+    "completed": 26
   },
   "impact": {
-    "computed_at": "2026-08-22T10:58:16Z",
+    "computed_at": "2026-08-22T11:08:13Z",
     "files_touched": [
+      "README.md",
+      "cmd/image-proxy/main.go",
       "draft/tracks.md",
       "draft/tracks/add-imgproxy-url-params/metadata.json",
       "draft/tracks/add-imgproxy-url-params/plan.md",
@@ -26,8 +28,13 @@
       "internal/procopts/options_test.go",
       "internal/procopts/parse.go",
       "internal/procopts/parse_test.go",
+      "internal/procopts/validate.go",
+      "internal/procopts/validate_test.go",
       "internal/resizer/processing_test.go",
       "internal/resizer/resizer.go",
+      "internal/server/params.go",
+      "internal/server/params_test.go",
+      "internal/server/server.go",
       "internal/types/types.go",
       "internal/urlsign/verify.go",
       "internal/urlsign/verify_test.go"
@@ -35,6 +42,7 @@
     "modules_touched": [
       "procopts",
       "resizer",
+      "server",
       "types",
       "urlsign"
     ],
