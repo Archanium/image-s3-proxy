@@ -1,0 +1,37 @@
+{
+  "id": "add-imgproxy-url-params",
+  "title": "imgproxy-style processing options + signed URLs",
+  "type": "feature",
+  "status": "in_progress",
+  "created": "2026-08-22T09:44:18Z",
+  "updated": "2026-08-22T10:17:26Z",
+  "phases": {
+    "total": 3,
+    "completed": 1
+  },
+  "tasks": {
+    "total": 27,
+    "completed": 8
+  },
+  "impact": {
+    "computed_at": "2026-08-22T10:17:26Z",
+    "files_touched": [
+      "internal/procopts/canonical.go",
+      "internal/procopts/canonical_test.go",
+      "internal/procopts/options.go",
+      "internal/procopts/options_test.go",
+      "internal/procopts/parse.go",
+      "internal/procopts/parse_test.go",
+      "internal/urlsign/verify.go",
+      "internal/urlsign/verify_test.go"
+    ],
+    "modules_touched": [
+      "procopts",
+      "urlsign"
+    ],
+    "downstream_files": 0,
+    "downstream_modules": [],
+    "max_depth": 0,
+    "by_category": {}
+  }
+}
