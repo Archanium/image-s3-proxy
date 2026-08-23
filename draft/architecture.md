@@ -113,7 +113,7 @@ Hetzner dedicated servers under k3s.
 | Test fidelity            | High — every prod package has `_test.go` (server: 1584 LOC of tests) | `find` |
 | External I/O surface     | S3 GET/HEAD/PUT against origin + optional cache + optional fallback; libvips in-process; stdout JSON logs | `s3.go`, `resizer.go`, `accesslog/log.go` |
 | Concurrency model        | Goroutine-per-request (stdlib net/http) + 1 fire-and-forget worker goroutine per `POST /_/worker/trigger`; per-request `*Timings` is mutex-guarded | `server.go`, `accesslog/timings.go` |
-| Configuration surface    | 22 env vars (catalogued §7) — grew by 6 (`CACHE_MODE`, `CACHE_BUCKET`, `CACHE_S3_ENDPOINT`, `CACHE_AWS_*`) | `main.go` |
+| Configuration surface    | 27 env vars (catalogued §7) — grew by 6 (`CACHE_MODE`, `CACHE_BUCKET`, `CACHE_S3_ENDPOINT`, `CACHE_AWS_*`) | `main.go` |
 
 ---
 
@@ -143,6 +143,13 @@ monitoring depends on. Each carries a provenance tag.
 | I16 | The `X-Use-Cache` request header is honored only when `CACHE_MODE != off`. Values `"true"` / `"false"` override the default read source for one request; any other value is ignored silently. Writes are unaffected by the header — dual-write semantics depend only on `CACHE_MODE` | [Code:server.go:effectiveReadClient] | Per-request override for synthetic monitors. |
 | I17 | Cache-hit speculative GET: the AWS SDK v2 typed errors `*types.NoSuchKey` / `*types.NotFound` are classified as clean miss (fall through to regex matching with no log line). Any other error logs `cache client error for ...` and **still** falls through (fail-open, matching pre-track behavior, just no longer silently misclassified) | [Code:server.go:ServeHTTP, isNotFoundErr helper] | Fixes the silent-error fall-through originally flagged at init time. |
 
+| I18 | The `/_p/` processing-option route is **fail-closed**. While `Server.urlSigner` is nil the prefix is not special: the request falls through the dispatch ladder and 404s like any other unmatched path. Only `SetURLSigner` (from `main.go`, when `SIGNATURE_KEY`+`SIGNATURE_SALT` or `ALLOW_UNSAFE_URLS=true` are configured) brings the route into existence | [Code:server.go:ServeHTTP, params.go:handleParams, main.go] | The feature ships inert on every deployment that does not opt in. |
+| I19 | The signed payload **excludes** the `/_p/{signature}` prefix — what is signed is exactly `/{options}/{source}`. Verification is HMAC-SHA256 over `salt ‖ path`, truncated to `SIGNATURE_SIZE`, compared with `hmac.Equal` | [Code:urlsign/verify.go, params.go:handleParams] | This is the imgproxy compatibility contract: an off-the-shelf imgproxy signing SDK produces these bytes. `urlsign/verify_test.go` pins it against vectors derived from the documented algorithm, not from our implementation. Changing what is signed breaks every client. |
+| I20 | `handleParams` runs cheap checks before expensive ones: signature → parse → `MAX_DIMENSION` → source resolution → S3 → libvips. A request that fails any earlier gate performs **no** S3 read and **no** libvips call | [Code:params.go:handleParams] | The dimension cap is the replacement for the legacy regexes' four-digit width bound; without it a free-form vocabulary is an OOM vector. Tests fail if the mocks are reached. |
+| I21 | The cache key for a processed variant is `{clientId}[-{group}]/_p/{canonical}/{rest-of-source-tail}`, where `canonical` is `Options.Canonical()` — aliases resolved, defaults dropped, values normalised, sorted by name, joined with `,`; an empty set renders `_` | [Code:params.go:paramCacheKey, procopts/canonical.go] | Equivalent URLs must collapse to one object or the cache-cardinality bound is lost. The tenant stays in segment 1 so bucket lifecycle rules and the fallback bucket's clientId-prefix handling keep working. `_p` can never collide with a key a legacy URL produces. |
+| I22 | Passthrough responses on the `/_p/` route — `raw:1`, a matching `skip_processing`, or a source extension that is not an encodable output format — serve the origin bytes untouched, **never** probe the cache, and **never** write | [Code:params.go:handleParams] | A second copy of an original buys nothing. The not-encodable clause is what stops a `files/` PDF being silently re-encoded as JPEG by the resizer's JPEG fallback. |
+| I23 | `types.ImageOptions.Processing` selects the resizer pipeline. Nil — every pre-existing call site — runs `applyLegacy`, which is the pre-track body moved verbatim. Non-nil runs `applyProcessing` | [Code:types.go, resizer.go:Resize] | The three legacy URL families are a frozen contract; the untouched pre-existing test suite is the proof it has not shifted. |
+
 **Safety rules (don't do):**
 
 - **Do not** add an in-process LRU/byte cache layer on top of S3. The
@@ -159,6 +166,12 @@ monitoring depends on. Each carries a provenance tag.
   batch is the retry mechanism.
 - **Do not** write to `cmd/image-proxy/main.go`'s `os.Getenv` pattern from
   any internal package — `main.go` is the only env-reader by convention.
+- **Do not** change what the `/_p/` route signs (I19) without treating it as
+  a breaking client change. It is pinned to imgproxy's scheme on purpose.
+- **Do not** edit `resizer.applyLegacy` (I23). New behaviour belongs in
+  `applyProcessing`.
+- **Do not** move the `MAX_DIMENSION` check after any S3 or libvips call
+  (I20).
 
 ---
 
@@ -233,6 +246,7 @@ the named capture groups in `server.go`.
 | `resizeRegex` | resize products/blocks/branding | `/13/2/images/products/240/336/foo.jpg` | `13/catalog/products/images/foo.jpg` | `13/2/images/products/240/336/foo.jpg` |
 | `fileRegex` | passthrough files | `/13/files/42/doc.pdf` | `13/files/42/doc.pdf` | (same — no transform) |
 | `folderImageRegex` | format-change / passthrough | `/13/images/branding/logo.webp` | `13/catalog/branding/images/logo.webp` | `13/0/images/branding/logo.webp` |
+| `_p/` prefix (not a regex) | imgproxy-style processing options | `/_p/{sig}/rt:fill/w:240/h:336/13/products/foo.jpg` | same candidate ladder as `resizeRegex`, via `originCandidateKeys` | `13/_p/height=336,resizing_type=fill,width=240/products/foo.jpg` |
 
 Key facts (unchanged since init):
 
@@ -241,7 +255,13 @@ Key facts (unchanged since init):
   v2/v3).
 - A trailing format extension is **always** the last `.`-suffix. Compound
   extensions like `foo.png.webp` strip the original extension.
-- The resize path tries multiple candidate keys (up to ~14) before giving up.
+- The resize path tries multiple candidate keys (up to ~16) before giving up.
+- The `_p/` family is dispatched by a `strings.HasPrefix` check rather than a
+  fourth regex: the option list is variable-length, so a pattern would need a
+  second parsing pass anyway. It is checked first, and only when a signer is
+  configured (I18). Source resolution goes through the same
+  `originCandidateKeys` / `splitOutputFormat` helpers the legacy handler
+  uses, which were extracted from `handleResize` for exactly that reason.
 
 ### 3.3 Worker pre-resize flow (PR #4: BatchRequest envelope)
 
@@ -320,11 +340,13 @@ The `Entry` JSON shape (top-level keys, fixed order):
 | Module | Path | Prod LOC | Test LOC | Role |
 |--------|------|---------:|---------:|------|
 | `main` | `cmd/image-proxy/main.go` | 157 | — | env-var bootstrap, mode validation, two-client wiring, accesslog middleware install |
-| `types` | `internal/types/types.go` | 35 | — | `S3Client` + `Resizer` interfaces, `ImageOptions`; `Storage` declared-but-unused (gap #2) |
+| `types` | `internal/types/types.go` | 55 | — | `S3Client` + `Resizer` interfaces, `ImageOptions` (now carrying `*procopts.Options`); `Storage` declared-but-unused (gap #3) |
 | `s3` | `internal/s3/s3.go` | 182 | 351 | AWS SDK v2 client with optional origin-side fallback bucket; typed-error classification with HOS-style string fallback |
-| `resizer` | `internal/resizer/resizer.go` | 157 | 153 | libvips wrapper (govips/v2); format dispatch |
+| `resizer` | `internal/resizer/resizer.go` | 551 | 518 | libvips wrapper (govips/v2); two pipelines (legacy + imgproxy) sharing one loader and one format dispatch |
 | `accesslog` | `internal/accesslog/` (5 files) | 487 | 878 | HTTP middleware that emits structured JSON access log + Server-Timing response header; per-request `*Timings` accumulator; typed `Entry` |
-| `server` | `internal/server/server.go` | 619 | 1584 | HTTP routing (3 regex families + worker trigger), `CacheMode` dispatch, `effectiveReadClient`, `putBoth` dual-write, `s.time` phase wrapper, BatchRequest validation |
+| `procopts` | `internal/procopts/` (4 files) | 851 | 910 | imgproxy processing-option vocabulary: parsing, validation, canonicalisation. Pure, stdlib-only, leaf of the graph |
+| `urlsign` | `internal/urlsign/verify.go` | 187 | 317 | imgproxy-compatible HMAC-SHA256 URL signature verification. Pure, stdlib-only, leaf |
+| `server` | `internal/server/` (2 files) | 1016 | 2433 | HTTP routing (3 regex families + `_p/` prefix + worker trigger), `CacheMode` dispatch, `effectiveReadClient`, `putBoth` dual-write, `s.time` phase wrapper, BatchRequest validation |
 | `worker` | `internal/worker/worker.go` | 157 | 362 | `ProcessBatch` with cartesian fan-out (images × sizes × formats), per-image / per-output isolation, dual-write |
 
 Totals: ~1794 LOC of production code (was ~600 at init) + ~3380 LOC of tests
@@ -343,18 +365,25 @@ graph TD
     worker[internal/worker]
     types[internal/types]
     accesslog[internal/accesslog]
+    procopts[internal/procopts]
+    urlsign[internal/urlsign]
 
     main --> s3pkg
     main --> resizer
     main --> server
     main --> accesslog
+    main --> urlsign
 
     server --> types
     server --> worker
     server --> accesslog
+    server --> procopts
+    server --> urlsign
 
     worker --> types
     resizer --> types
+    resizer --> procopts
+    types --> procopts
 
     s3pkg -.implements.-> types
     resizer -.implements.-> types
@@ -365,8 +394,12 @@ graph TD
 
 Key observations:
 
+- `types` now depends on `procopts`, because `ImageOptions` carries the
+  parsed option set. `procopts` and `urlsign` are both leaves — stdlib only,
+  no S3, no HTTP, no libvips — so the graph is still a DAG and both are
+  testable on the host without Docker.
 - `types` remains the only internal-internal dependency target for s3 /
-  resizer / worker.
+  worker.
 - `accesslog` is a new sibling that does NOT import from `types`. Its
   middleware wraps any `http.Handler`; the proxy installs it around the
   `*Server` in `main.go`. The `server` package imports `accesslog` for the
@@ -541,6 +574,10 @@ All configuration is process-env, evaluated once in `main.go`:
 | `VIPS_CONCURRENCY` | libvips default (cores) | N | libvips global concurrency |
 | `VIPS_MAX_CACHE_MEM` | libvips default | N | libvips cache memory cap |
 | `VIPS_MAX_CACHE_SIZE` | libvips default | N | libvips cache entry cap |
+| `SIGNATURE_KEY` / `SIGNATURE_SALT` | — | Y when either is set (fatal if only one) | Hex-encoded HMAC key/salt for the `/_p/` route, imgproxy convention. Both unset → route disabled (I18) |
+| `SIGNATURE_SIZE` | `32` | N | Digest truncation in bytes, 1-32 |
+| `ALLOW_UNSAFE_URLS` | `false` | N | Accept the literal `unsafe` signature. Dev only; warns on every boot |
+| `MAX_DIMENSION` | `5120` | N (fatal if non-numeric or < 1) | Ceiling for width / height / absolute crop on `/_p/` (I20) |
 | `IMAGE_TAGS` | — | N — **deprecated** | Logged-and-ignored on startup if non-empty. HOS and R2 don't implement S3 Tagging. |
 
 ### 7.3 Reconciliation between origin, cache, and fallback

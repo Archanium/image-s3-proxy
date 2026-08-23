@@ -17,7 +17,14 @@ synced_to_commit: "6f2e71a3c70d732b573801747ca0435698c9d0e5"
 # Tracks
 
 ## Active
-<!-- No active tracks -->
+
+### add-imgproxy-url-params - imgproxy-style processing options + signed URLs
+- **Status:** [~] In Progress
+- **Created:** 2026-08-22
+- **Phases:** 3/3
+- **Tasks:** 26/27 (task 27 is the deploy gate)
+- **PR:** https://github.com/Archanium/image-s3-proxy/pull/7
+- **Path:** `./tracks/add-imgproxy-url-params/`
 
 ## Completed
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"image-proxy/internal/accesslog"
 	"image-proxy/internal/types"
+	"image-proxy/internal/urlsign"
 	"image-proxy/internal/worker"
 	"log"
 	"net/http"
@@ -87,6 +88,16 @@ type Server struct {
 	worker       *worker.Worker
 	mode         CacheMode
 
+	// urlSigner verifies signatures on the /_p/ processing-option route.
+	// When nil the route is disabled entirely and /_p/ paths fall through
+	// to the ordinary 404, which is the default on every deployment that
+	// has not configured signing. Set via SetURLSigner from main.go.
+	urlSigner *urlsign.Verifier
+
+	// maxDimension bounds the width, height and absolute crop dimensions a
+	// /_p/ URL may request, before any S3 read or libvips call.
+	maxDimension int
+
 	// workerAuthToken is the expected bearer token for
 	// POST /_/worker/trigger. When empty, the auth check is disabled and
 	// the endpoint accepts any caller (back-compat). Set via
@@ -110,6 +121,27 @@ func (s *Server) SetWorkerAuthToken(token string) {
 	s.workerAuthToken = token
 }
 
+// DefaultMaxDimension is the ceiling applied to width, height and absolute
+// crop dimensions on the /_p/ route. It matches the value the legacy
+// folderImageRegex path already hard-codes.
+const DefaultMaxDimension = 5120
+
+// SetURLSigner enables the /_p/ processing-option route. While the verifier
+// is nil the route does not exist: a /_p/ path falls through the dispatch
+// ladder and 404s exactly like any other unmatched path.
+//
+// Called once at startup from main.go. Not thread-safe — calling this after
+// the listener has started will race with in-flight requests.
+func (s *Server) SetURLSigner(v *urlsign.Verifier) {
+	s.urlSigner = v
+}
+
+// SetMaxDimension overrides DefaultMaxDimension. A value of 0 or less
+// disables the bound, which is only sensible in tests.
+func (s *Server) SetMaxDimension(n int) {
+	s.maxDimension = n
+}
+
 // NewServer constructs a Server in CacheModeOff. Both client roles are
 // served by the same instance — this is the backwards-compatible
 // single-client constructor used by tests and by main.go when CACHE_MODE
@@ -130,6 +162,7 @@ func NewServerWithMode(originClient, cacheClient types.S3Client, mode CacheMode,
 		resizer:      resizer,
 		worker:       worker.NewWorker(originClient, cacheClient, resizer, sizes, format, false),
 		mode:         mode,
+		maxDimension: DefaultMaxDimension,
 	}
 }
 
@@ -212,6 +245,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	log.Printf("Received request for key: %s", key)
+
+	// 0a. Processing-option route. Only reachable once signing is
+	// configured; until then the prefix is not special and falls through to
+	// the ordinary 404 below.
+	if s.urlSigner != nil && strings.HasPrefix(key, paramRoutePrefix) {
+		s.handleParams(w, r, key)
+		return
+	}
 
 	// 0. Ensure there is at least one extension in the filename
 	lastSlash := strings.LastIndex(key, "/")
@@ -318,15 +359,7 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request, key string
 
 	var format string
 	// Always the last extension is the format
-	pathParts := strings.Split(path, ".")
-	if len(pathParts) >= 2 {
-		format = pathParts[len(pathParts)-1]
-		// Only strip the extension if it named like ".png.webp" or ".jpg.avif" (3 or more parts)
-		if len(pathParts) > 2 {
-			pathParts = pathParts[:len(pathParts)-1]
-			path = strings.Join(pathParts, ".")
-		}
-	}
+	path, format = splitOutputFormat(path)
 
 	originalKey = clientId + "/catalog/" + folder + "/images/" + path
 	log.Printf("Calculated originalKey: %s", originalKey)
@@ -372,35 +405,7 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request, key string
 	var err error
 
 	// Try multiple possible locations for the original image
-	var keysToTry []string
-	seen := make(map[string]bool)
-	addKey := func(k string) {
-		if k != "" && !seen[k] {
-			keysToTry = append(keysToTry, k)
-			seen[k] = true
-		}
-	}
-
-	addKey(originalKey)
-	if format != "" {
-		addKey(originalKey + "." + format)
-	}
-	altKey := clientId + "/images/" + folder + "/" + path
-	addKey(altKey)
-	if format != "" {
-		addKey(altKey + "." + format)
-	}
-
-	// Fallback: if path has an extension, try common ones
-	if lastDot := strings.LastIndex(path, "."); lastDot > 0 {
-		basePath := path[:lastDot]
-		for _, ext := range []string{"jpg", "jpeg", "png", "webp", "gif", "avif"} {
-			addKey(clientId + "/catalog/" + folder + "/images/" + basePath + "." + ext)
-			addKey(clientId + "/images/" + folder + "/" + basePath + "." + ext)
-		}
-		addKey(clientId + "/catalog/" + folder + "/images/" + basePath)
-		addKey(clientId + "/images/" + folder + "/" + basePath)
-	}
+	keysToTry := originCandidateKeys(clientId, folder, path, format)
 
 	for _, k := range keysToTry {
 		k := k
@@ -667,6 +672,68 @@ func (s *Server) getNormalizedKey(groups map[string]string, regexType int) strin
 	}
 	sb.WriteString(path)
 	return sb.String()
+}
+
+// splitOutputFormat separates the requested output format from a filename.
+// The format is always the last dot-suffix. A compound extension such as
+// "foo.png.webp" additionally strips the original extension to recover the
+// source name; a plain "foo.jpg" keeps its name intact.
+//
+// Extracted from handleResize so the /_p/ route uses the same rule rather
+// than a second implementation of it.
+func splitOutputFormat(path string) (string, string) {
+	parts := strings.Split(path, ".")
+	if len(parts) < 2 {
+		return path, ""
+	}
+	format := parts[len(parts)-1]
+	// Only strip the extension if it is named like ".png.webp" or
+	// ".jpg.avif" (3 or more parts)
+	if len(parts) > 2 {
+		return strings.Join(parts[:len(parts)-1], "."), format
+	}
+	return path, format
+}
+
+// originCandidateKeys returns, in priority order, every origin-bucket key
+// the source image might live under. The upstream catalog system has used
+// more than one layout over time, so a miss on the primary key is not
+// conclusive.
+//
+// Extracted verbatim from handleResize so the /_p/ route resolves sources
+// identically. Order matters: callers stop at the first key that resolves.
+func originCandidateKeys(clientId, folder, path, format string) []string {
+	var keys []string
+	seen := make(map[string]bool)
+	addKey := func(k string) {
+		if k != "" && !seen[k] {
+			keys = append(keys, k)
+			seen[k] = true
+		}
+	}
+
+	originalKey := clientId + "/catalog/" + folder + "/images/" + path
+	addKey(originalKey)
+	if format != "" {
+		addKey(originalKey + "." + format)
+	}
+	altKey := clientId + "/images/" + folder + "/" + path
+	addKey(altKey)
+	if format != "" {
+		addKey(altKey + "." + format)
+	}
+
+	// Fallback: if path has an extension, try common ones
+	if lastDot := strings.LastIndex(path, "."); lastDot > 0 {
+		basePath := path[:lastDot]
+		for _, ext := range []string{"jpg", "jpeg", "png", "webp", "gif", "avif"} {
+			addKey(clientId + "/catalog/" + folder + "/images/" + basePath + "." + ext)
+			addKey(clientId + "/images/" + folder + "/" + basePath + "." + ext)
+		}
+		addKey(clientId + "/catalog/" + folder + "/images/" + basePath)
+		addKey(clientId + "/images/" + folder + "/" + basePath)
+	}
+	return keys
 }
 
 func getNamedGroups(re *regexp.Regexp, s string) map[string]string {
