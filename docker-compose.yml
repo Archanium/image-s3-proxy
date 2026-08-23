@@ -20,6 +20,17 @@ services:
       - OLD_S3_ENDPOINT=${OLD_S3_ENDPOINT:-}
       - PORT=8080
       - IMAGE_TAGS=ManagedBy=ImageProxy,Environment=Production
+      # Processing-option route (/_p/). LOCAL DEVELOPMENT ONLY.
+      # ALLOW_UNSAFE_URLS lets you hand-write URLs with the literal signature
+      # "unsafe" instead of computing an HMAC:
+      #   /_p/unsafe/rt:fill/w:240/h:336/13/products/foo.jpg
+      # Never set this in k3s. To exercise real signing locally instead, export
+      # SIGNATURE_KEY and SIGNATURE_SALT (hex) and ALLOW_UNSAFE_URLS=false.
+      - ALLOW_UNSAFE_URLS=${ALLOW_UNSAFE_URLS:-true}
+      - SIGNATURE_KEY=${SIGNATURE_KEY:-}
+      - SIGNATURE_SALT=${SIGNATURE_SALT:-}
+      - SIGNATURE_SIZE=${SIGNATURE_SIZE:-}
+      - MAX_DIMENSION=${MAX_DIMENSION:-5120}
     ports:
       - "8080:8080"
     restart: unless-stopped
@@ -56,6 +67,17 @@ services:
       - OLD_S3_ENDPOINT=${OLD_S3_ENDPOINT:-}
       - PORT=8080
       - IMAGE_TAGS=ManagedBy=ImageProxy,Environment=Production
+      # Processing-option route (/_p/). LOCAL DEVELOPMENT ONLY.
+      # ALLOW_UNSAFE_URLS lets you hand-write URLs with the literal signature
+      # "unsafe" instead of computing an HMAC:
+      #   /_p/unsafe/rt:fill/w:240/h:336/13/products/foo.jpg
+      # Never set this in k3s. To exercise real signing locally instead, export
+      # SIGNATURE_KEY and SIGNATURE_SALT (hex) and ALLOW_UNSAFE_URLS=false.
+      - ALLOW_UNSAFE_URLS=${ALLOW_UNSAFE_URLS:-true}
+      - SIGNATURE_KEY=${SIGNATURE_KEY:-}
+      - SIGNATURE_SALT=${SIGNATURE_SALT:-}
+      - SIGNATURE_SIZE=${SIGNATURE_SIZE:-}
+      - MAX_DIMENSION=${MAX_DIMENSION:-5120}
     ports:
       - "8081:8080"
     restart: unless-stopped

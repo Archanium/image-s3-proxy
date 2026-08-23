@@ -120,6 +120,8 @@ Processing options + URL signing (the `/_p/` route — see below):
   bypasses verification. **Local development only**; logs a warning on every
   boot. Setting this alone (with no key/salt) enables the route in
   unsigned-only mode.
+  `docker-compose.yml` sets this for the local `app` services so `make up` gives
+  you a working `/_p/` route without a signer. It must never be set in k3s.
 - `MAX_DIMENSION` — ceiling for requested width, height and absolute crop
   dimensions. Defaults to `5120`. Enforced before any S3 read or libvips
   call.
@@ -135,6 +137,10 @@ Debug:
 - `DEBUG=true` — enables libvips logging.
 
 ## Processing options (`/_p/`)
+
+> Building URLs from a client? See **[docs/signed-urls.md](docs/signed-urls.md)** —
+> the full option reference, signing recipes in four languages, and test vectors.
+> The section below is the operator-facing summary.
 
 An imgproxy-compatible URL vocabulary, served alongside — never instead of —
 the three legacy URL families, which are unchanged.
