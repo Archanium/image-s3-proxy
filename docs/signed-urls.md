@@ -23,6 +23,7 @@ see [`../README.md`](../README.md).
 - [Resizing types](#resizing-types)
 - [Gravity](#gravity)
 - [Passthrough](#passthrough)
+- [Transparency](#transparency)
 - [Errors](#errors)
 - [Trying it locally](#trying-it-locally)
 - [Checklist](#checklist)
@@ -365,6 +366,36 @@ working PDF rather than a PDF re-encoded as a JPEG.
 > own key, so a second copy buys nothing. Every passthrough request reads the
 > origin. If you serve the same untouched asset at high volume, point your CDN at
 > it rather than relying on the proxy's cache.
+
+---
+
+## Transparency
+
+`/_p/` follows imgproxy's rule: **transparency survives into any alpha-capable
+output format** (`png`, `webp`, `avif`), and `background` is what flattens it.
+`jpg`/`jpeg` have no alpha channel, so they always flatten — to the requested
+background, or to white if none was given.
+
+This **differs from the legacy routes**, which default to flattening a
+transparent *raster* original to white and keep alpha only for SVG sources. The
+same source and the same output format therefore give different results
+depending on which vocabulary you use:
+
+| Request | Transparent PNG source |
+|---|---|
+| `/13/1/images/products/240/336/foo.png` | flattened to white |
+| `/_p/{sig}/w:240/h:336/13/products/foo.png` | alpha preserved |
+
+That is deliberate — `/_p/` is a new contract and matches imgproxy rather than
+the historical Node.js behaviour. If you are porting a legacy URL and want the
+old look, add an explicit background:
+
+```
+/_p/{sig}/w:240/h:336/bg:fff/13/products/foo.png
+```
+
+The legacy `flat/` and `alpha/` URL segments have no `/_p/` equivalent, and do
+not need one: `bg:` covers flattening, and omitting it covers keeping.
 
 ---
 

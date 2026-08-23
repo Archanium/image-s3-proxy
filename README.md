@@ -215,6 +215,17 @@ below `1` is a fraction of it, anything else is absolute pixels.
 
 Operation order is **crop → resize → extend → background flatten → encode**.
 
+### Transparency
+
+`/_p/` follows imgproxy's rule — transparency survives into `png` / `webp` /
+`avif`, and `bg:` is what flattens it. This differs from the legacy routes,
+whose `AlphaAuto` default flattens transparent **raster** originals to white
+(see [SVG & transparency](#svg--transparency)). A transparent PNG served through
+`/13/1/images/products/240/336/foo.png` comes back flattened; the same source
+through `/_p/{sig}/w:240/h:336/13/products/foo.png` keeps its alpha. Add `bg:fff`
+to get the legacy look. The `flat/` / `alpha/` segments have no `/_p/`
+equivalent and do not need one.
+
 ### Passthrough
 
 The source bytes are served untouched, and **nothing is cached**, when any of:
