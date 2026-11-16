@@ -402,12 +402,7 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request, key string
 	keysToTry := originCandidateKeys(clientId, folder, path, format)
 
 	for _, k := range keysToTry {
-		k := k
-		err = s.time(ctx, "s3-get", func() error {
-			var e error
-			data, _, e = s.originClient.Get(ctx, k)
-			return e
-		})
+		data, _, err = s.readOriginal(ctx, k)
 		if err == nil {
 			break
 		}
@@ -455,13 +450,7 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, key string, 
 	clientId := groups["clientId"]
 	originalKey := clientId + "/files/" + fileId + "/" + path
 
-	var data []byte
-	var contentType string
-	err := s.time(ctx, "s3-get", func() error {
-		var e error
-		data, contentType, e = s.originClient.Get(ctx, originalKey)
-		return e
-	})
+	data, contentType, err := s.readOriginal(ctx, originalKey)
 	if err != nil {
 		s.httpError(w, "File not found", http.StatusNotFound)
 		return

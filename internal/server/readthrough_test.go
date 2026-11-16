@@ -186,3 +186,101 @@ func TestLiveMode_BackfillIsBounded(t *testing.T) {
 		t.Errorf("backfills started = %d, want 1 (one slot)", n)
 	}
 }
+
+// Originals: in live mode the original is read from the cache first, and an
+// original fetched from the origin is copied into the cache, so the next
+// size of the same image does not touch the origin.
+
+const (
+	resizeURL   = "/123/3/images/products/600/0/chair.jpg.webp"
+	originalKey = "123/catalog/products/images/chair.jpg"
+)
+
+func passResizer() *mockResizer {
+	return &mockResizer{resizeFunc: func(data []byte, opts types.ImageOptions) ([]byte, string, error) {
+		if string(data) != "original" {
+			return nil, "", errors.New("resized the wrong bytes: " + string(data))
+		}
+		return []byte("resized"), "image/webp", nil
+	}}
+}
+
+func TestLiveMode_OriginalReadFromOrigin_IsCopiedToCache(t *testing.T) {
+	origin := &mockS3Client{getFunc: func(ctx context.Context, k string) ([]byte, string, error) {
+		if k == originalKey {
+			return []byte("original"), "image/jpeg", nil
+		}
+		return nil, "", errNoSuchKey()
+	}}
+	puts := make(chan putCall, 4)
+	cache := &mockS3Client{getFunc: notFoundGet, putFunc: recordingPut(puts)}
+
+	srv := NewServerWithMode(origin, cache, CacheModeLive, passResizer(), nil, "")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, httptest.NewRequest("GET", resizeURL, nil))
+	if w.Code != http.StatusOK || w.Body.String() != "resized" {
+		t.Fatalf("got %d %q", w.Code, w.Body.String())
+	}
+	srv.waitBackfills()
+	close(puts)
+	var gotOriginal bool
+	for p := range puts {
+		if p.key == originalKey {
+			gotOriginal = p.data == "original" && p.contentType == "image/jpeg"
+		}
+	}
+	if !gotOriginal {
+		t.Error("the original was not copied into the cache")
+	}
+}
+
+func TestLiveMode_OriginalInCache_OriginNotRead(t *testing.T) {
+	var originOriginalGets int32
+	origin := &mockS3Client{getFunc: func(ctx context.Context, k string) ([]byte, string, error) {
+		if k == originalKey {
+			atomic.AddInt32(&originOriginalGets, 1)
+		}
+		return nil, "", errNoSuchKey()
+	}}
+	cache := &mockS3Client{getFunc: func(ctx context.Context, k string) ([]byte, string, error) {
+		if k == originalKey {
+			return []byte("original"), "image/jpeg", nil
+		}
+		return nil, "", errNoSuchKey()
+	}}
+
+	srv := NewServerWithMode(origin, cache, CacheModeLive, passResizer(), nil, "")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, httptest.NewRequest("GET", resizeURL, nil))
+	if w.Code != http.StatusOK || w.Body.String() != "resized" {
+		t.Fatalf("got %d %q", w.Code, w.Body.String())
+	}
+	if n := atomic.LoadInt32(&originOriginalGets); n != 0 {
+		t.Errorf("origin read the original %d times, want 0", n)
+	}
+}
+
+func TestShadowMode_OriginalNotCopiedToCache(t *testing.T) {
+	origin := &mockS3Client{getFunc: func(ctx context.Context, k string) ([]byte, string, error) {
+		if k == originalKey {
+			return []byte("original"), "image/jpeg", nil
+		}
+		return nil, "", errNoSuchKey()
+	}}
+	puts := make(chan putCall, 4)
+	cache := &mockS3Client{getFunc: notFoundGet, putFunc: recordingPut(puts)}
+
+	srv := NewServerWithMode(origin, cache, CacheModeShadow, passResizer(), nil, "")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, httptest.NewRequest("GET", resizeURL, nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d", w.Code)
+	}
+	srv.waitBackfills()
+	close(puts)
+	for p := range puts {
+		if p.key == originalKey {
+			t.Error("shadow mode copied the original into the cache")
+		}
+	}
+}

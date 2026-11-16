@@ -31,6 +31,9 @@ const backfillTimeout = 30 * time.Second
 // other error is a failed read the caller logs and falls through on.
 func (s *Server) readCached(ctx context.Context, r *http.Request, key string) ([]byte, string, error) {
 	readClient := s.effectiveReadClient(r)
+	if s.readsThroughToOrigin(readClient) {
+		return s.readThrough(ctx, key)
+	}
 	var data []byte
 	var contentType string
 	err := s.time(ctx, "s3-get", func() error {
@@ -38,8 +41,47 @@ func (s *Server) readCached(ctx context.Context, r *http.Request, key string) ([
 		data, contentType, e = readClient.Get(ctx, key)
 		return e
 	})
-	if err == nil || !s.readsThroughToOrigin(readClient) {
-		return data, contentType, err
+	return data, contentType, err
+}
+
+// readOriginal reads an uploaded original (or a /files/ object) to resize
+// or serve. In live mode it reads the cache first and copies an original
+// found only in the origin into the cache, so the next size of the same
+// image does not touch the origin. In off and shadow mode it reads the
+// origin only, as before.
+//
+// The origin stays the source of truth: the catalog system writes new
+// originals there, and the cache only ever holds copies of what was read.
+// An original overwritten in the origin under the same key keeps its old
+// copy in the cache; uploads get new file names, so that does not happen
+// in practice.
+func (s *Server) readOriginal(ctx context.Context, key string) ([]byte, string, error) {
+	if s.mode == CacheModeLive && s.cacheClient != s.originClient {
+		return s.readThrough(ctx, key)
+	}
+	var data []byte
+	var contentType string
+	err := s.time(ctx, "s3-get", func() error {
+		var e error
+		data, contentType, e = s.originClient.Get(ctx, key)
+		return e
+	})
+	return data, contentType, err
+}
+
+// readThrough reads key from the cache, falls back to the origin when the
+// cache misses or fails, and copies the object into the cache after a clean
+// miss.
+func (s *Server) readThrough(ctx context.Context, key string) ([]byte, string, error) {
+	var data []byte
+	var contentType string
+	err := s.time(ctx, "s3-get", func() error {
+		var e error
+		data, contentType, e = s.cacheClient.Get(ctx, key)
+		return e
+	})
+	if err == nil {
+		return data, contentType, nil
 	}
 
 	cacheMiss := isNotFoundErr(err)
@@ -70,7 +112,7 @@ func (s *Server) readsThroughToOrigin(readClient interface{}) bool {
 		readClient == s.cacheClient
 }
 
-// backfill copies a variant found in the origin into the cache after the
+// backfill copies an object found in the origin into the cache after the
 // response has been written. It never blocks the request.
 func (s *Server) backfill(key string, data []byte, contentType string) {
 	select {

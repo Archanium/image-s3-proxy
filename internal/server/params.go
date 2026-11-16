@@ -120,12 +120,7 @@ func (s *Server) handleParams(w http.ResponseWriter, r *http.Request, key string
 	var contentType string
 	var getErr error
 	for _, k := range src.candidates {
-		k := k
-		getErr = s.time(ctx, "s3-get", func() error {
-			var e error
-			data, contentType, e = s.originClient.Get(ctx, k)
-			return e
-		})
+		data, contentType, getErr = s.readOriginal(ctx, k)
 		if getErr == nil {
 			break
 		}
