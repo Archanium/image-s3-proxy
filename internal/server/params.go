@@ -102,13 +102,7 @@ func (s *Server) handleParams(w http.ResponseWriter, r *http.Request, key string
 
 	if !passthrough {
 		cacheKey := paramCacheKey(src, opts.Canonical())
-		var data []byte
-		var contentType string
-		getErr := s.time(ctx, "s3-get", func() error {
-			var e error
-			data, contentType, e = s.effectiveReadClient(r).Get(ctx, cacheKey)
-			return e
-		})
+		data, contentType, getErr := s.readCached(ctx, r, cacheKey)
 		if getErr == nil {
 			log.Printf("param route: %s found in cache layer, serving directly", cacheKey)
 			s.serveImage(w, data, contentType)
@@ -126,12 +120,7 @@ func (s *Server) handleParams(w http.ResponseWriter, r *http.Request, key string
 	var contentType string
 	var getErr error
 	for _, k := range src.candidates {
-		k := k
-		getErr = s.time(ctx, "s3-get", func() error {
-			var e error
-			data, contentType, e = s.originClient.Get(ctx, k)
-			return e
-		})
+		data, contentType, getErr = s.readOriginal(ctx, k)
 		if getErr == nil {
 			break
 		}

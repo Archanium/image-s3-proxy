@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
@@ -104,6 +105,11 @@ type Server struct {
 	// SetWorkerAuthToken from main.go when the WORKER_AUTH_TOKEN env var
 	// is configured.
 	workerAuthToken string
+
+	// backfillSlots bounds in-flight cache backfills (see readthrough.go);
+	// backfills tracks them so tests and shutdown can wait for them.
+	backfillSlots chan struct{}
+	backfills     sync.WaitGroup
 }
 
 // SetWorkerAuthToken enables bearer-token authentication on
@@ -157,12 +163,13 @@ func NewServer(s3Client types.S3Client, resizer types.Resizer, sizes [][]int, fo
 // dual-writes when the mode dictates it.
 func NewServerWithMode(originClient, cacheClient types.S3Client, mode CacheMode, resizer types.Resizer, sizes [][]int, format string) *Server {
 	return &Server{
-		originClient: originClient,
-		cacheClient:  cacheClient,
-		resizer:      resizer,
-		worker:       worker.NewWorker(originClient, cacheClient, resizer, sizes, format, false),
-		mode:         mode,
-		maxDimension: DefaultMaxDimension,
+		originClient:  originClient,
+		cacheClient:   cacheClient,
+		resizer:       resizer,
+		worker:        worker.NewWorker(originClient, cacheClient, resizer, sizes, format, false),
+		mode:          mode,
+		maxDimension:  DefaultMaxDimension,
+		backfillSlots: make(chan struct{}, defaultBackfillSlots),
 	}
 }
 
@@ -271,14 +278,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// treated as a clean miss; any other error is logged and we fall
 	// through (fail-open, matching the historical Exists-then-fall-through
 	// behavior — but now explicitly classified, not silently misclassified).
-	readClient := s.effectiveReadClient(r)
-	var data []byte
-	var contentType string
-	getErr := s.time(ctx, "s3-get", func() error {
-		var e error
-		data, contentType, e = readClient.Get(ctx, key)
-		return e
-	})
+	data, contentType, getErr := s.readCached(ctx, r, key)
 	if getErr == nil {
 		log.Printf("Key %s found in cache layer, serving directly", key)
 		w.Header().Set("Content-Type", contentType)
@@ -313,13 +313,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if normalizedKey != key {
 			log.Printf("Normalized key: %s", normalizedKey)
 			// Re-check the normalized key with the effective read client.
-			var nData []byte
-			var nContentType string
-			nErr := s.time(ctx, "s3-get", func() error {
-				var e error
-				nData, nContentType, e = readClient.Get(ctx, normalizedKey)
-				return e
-			})
+			nData, nContentType, nErr := s.readCached(ctx, r, normalizedKey)
 			if nErr == nil {
 				log.Printf("Normalized key %s found in cache layer, serving", normalizedKey)
 				w.Header().Set("Content-Type", nContentType)
@@ -408,12 +402,7 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request, key string
 	keysToTry := originCandidateKeys(clientId, folder, path, format)
 
 	for _, k := range keysToTry {
-		k := k
-		err = s.time(ctx, "s3-get", func() error {
-			var e error
-			data, _, e = s.originClient.Get(ctx, k)
-			return e
-		})
+		data, _, err = s.readOriginal(ctx, k)
 		if err == nil {
 			break
 		}
@@ -461,13 +450,7 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, key string, 
 	clientId := groups["clientId"]
 	originalKey := clientId + "/files/" + fileId + "/" + path
 
-	var data []byte
-	var contentType string
-	err := s.time(ctx, "s3-get", func() error {
-		var e error
-		data, contentType, e = s.originClient.Get(ctx, originalKey)
-		return e
-	})
+	data, contentType, err := s.readOriginal(ctx, originalKey)
 	if err != nil {
 		s.httpError(w, "File not found", http.StatusNotFound)
 		return
